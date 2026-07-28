@@ -2,7 +2,7 @@
 Interactive 3D SETI Ellipsoid & Stellar Catalog Visualizer.
 
 Generates dark-theme WebGL 3D interactive visualizations (Plotly HTML) rendering
-Earth, Supernova foci, target stars, and the active 3D SETI Ellipsoid shell.
+Earth, Supernova foci, target stars, line of sight, and the active 3D SETI Ellipsoid shell.
 """
 
 from typing import Optional, Dict, Any
@@ -23,36 +23,32 @@ from core.geometry import spherical_to_cartesian, _parse_datetime
 
 
 def _create_ellipsoid_mesh(
-    xe: float, ye: float, ze: float, d0: float, delta_t_years: float, n_points: int = 40
+    xe: float, ye: float, ze: float, d0: float, delta_t_years: float, n_points: int = 50
 ):
     """
-    Constructs 3D mesh grid coordinates (X, Y, Z) for an ellipsoid with foci at (0,0,0) and (xe, ye, ze).
+    Constructs 3D mesh grid coordinates (X, Y, Z) for an ellipsoid with foci at (0,0,0) [Earth] and (xe, ye, ze) [Supernova].
     """
-    # Major and minor axes in parsecs
     path_diff_ly = delta_t_years
     path_diff_pc = path_diff_ly / PARSEC_TO_LIGHT_YEAR
 
     a = (d0 + path_diff_pc) / 2.0  # Semi-major axis
-    c_foci = d0 / 2.0               # Focal distance
-    b = np.sqrt(max(a ** 2 - c_foci ** 2, 1e-3))  # Semi-minor axis
+    c_foci = d0 / 2.0               # Focal distance (half distance between Earth and SN)
+    b = np.sqrt(max(a ** 2 - c_foci ** 2, 1.0))  # Semi-minor axis
 
-    # Parametric sphere
+    # Parametric sphere mesh
     u = np.linspace(0, 2 * np.pi, n_points)
     v = np.linspace(0, np.pi, n_points)
     U, V = np.meshgrid(u, v)
 
-    # Standard unrotated ellipsoid centered at origin
+    # Standard unrotated ellipsoid with major axis along X
     x_std = a * np.sin(V) * np.cos(U)
     y_std = b * np.sin(V) * np.sin(U)
     z_std = b * np.cos(V)
 
-    # Rotation matrix to align X-axis with SN vector (xe, ye, ze)
+    # Rotation matrix R mapping (1,0,0) to normalized Supernova direction vector
     sn_vec = np.array([xe, ye, ze])
     norm_sn = np.linalg.norm(sn_vec)
-    if norm_sn == 0:
-        v_target = np.array([1.0, 0.0, 0.0])
-    else:
-        v_target = sn_vec / norm_sn
+    v_target = sn_vec / norm_sn if norm_sn > 0 else np.array([1.0, 0.0, 0.0])
 
     v_src = np.array([1.0, 0.0, 0.0])
     v_axis = np.cross(v_src, v_target)
@@ -98,17 +94,13 @@ def generate_interactive_3d_ellipsoid(
 ) -> str:
     """
     Generates an interactive Plotly 3D WebGL HTML visualization.
-    Renders Earth, Supernova focus, target stars, and the active 3D SETI Ellipsoid shell.
+    Renders Earth, Supernova focus, line of sight, target stars, and the active 3D SETI Ellipsoid shell.
     """
-    # Parse dates & compute elapsed time in years
     obs_dt = _parse_datetime(current_date)
     epoch_dt = _parse_datetime(sn_epoch)
     elapsed_years = (obs_dt - epoch_dt).total_seconds() / (86400.0 * DAYS_PER_YEAR)
 
-    # Cartesian 3D coordinates for Supernova
     xe, ye, ze = spherical_to_cartesian(sn_ra, sn_dec, sn_dist_pc)
-
-    # Compute target stars 3D coordinates
     xs, ys, zs = spherical_to_cartesian(stars_df["ra"], stars_df["dec"], stars_df["dist_pc"])
 
     fig = go.Figure()
@@ -123,7 +115,7 @@ def generate_interactive_3d_ellipsoid(
             marker=dict(size=10, color="#ffd700", symbol="circle"),
             text=["🌍 Earth (Observer)"],
             textposition="top center",
-            name="Earth (0,0,0)",
+            name="Earth (Focus 1)",
         )
     )
 
@@ -137,11 +129,23 @@ def generate_interactive_3d_ellipsoid(
             marker=dict(size=12, color="#ff1744", symbol="diamond"),
             text=[f"💥 {sn_name}"],
             textposition="top center",
-            name=f"{sn_name} (d={sn_dist_pc:.0f} pc)",
+            name=f"{sn_name} (Focus 2, d={sn_dist_pc:.0f} pc)",
         )
     )
 
-    # 3. SETI Ellipsoid Translucent 3D Surface Mesh
+    # 3. Dashed line of sight Earth -> Supernova
+    fig.add_trace(
+        go.Scatter3d(
+            x=[0, xe],
+            y=[0, ye],
+            z=[0, ze],
+            mode="lines",
+            line=dict(color="#ff9100", width=3, dash="dash"),
+            name="Line of Sight (Focal Axis)",
+        )
+    )
+
+    # 4. Translucent 3D Ellipsoid Surface Mesh
     try:
         X_mesh, Y_mesh, Z_mesh = _create_ellipsoid_mesh(xe, ye, ze, sn_dist_pc, elapsed_years)
         fig.add_trace(
@@ -149,58 +153,79 @@ def generate_interactive_3d_ellipsoid(
                 x=X_mesh,
                 y=Y_mesh,
                 z=Z_mesh,
-                colorscale=[[0, "rgba(0, 229, 255, 0.25)"], [1, "rgba(0, 229, 255, 0.25)"]],
+                colorscale=[[0, "rgba(0, 229, 255, 0.22)"], [1, "rgba(0, 229, 255, 0.22)"]],
                 showscale=False,
-                name="SETI Ellipsoid Shell",
+                name=f"SETI Ellipsoid Shell ({elapsed_years:.1f} yr)",
                 hoverinfo="name",
-                opacity=0.35,
+                opacity=0.30,
             )
         )
     except Exception as err:
         print(f"Warning: Could not render ellipsoid mesh surface: {err}")
 
-    # 4. Target Stars Scatter3d color-coded by delay_days
+    # 5. Target Stars Scatter3d color-coded by ellipsoid status
     delays = stars_df.get("delay_days", np.zeros(len(stars_df)))
-    hover_texts = [
-        f"<b>Star ID:</b> {row.get('source_id', 'N/A')}<br>"
-        f"<b>RA:</b> {row['ra']:.4f}° | <b>Dec:</b> {row['dec']:.4f}°<br>"
-        f"<b>Distance:</b> {row['dist_pc']:.1f} pc<br>"
-        f"<b>G mag:</b> {row.get('phot_g_mean_mag', 0.0):.2f}<br>"
-        f"<b>Ellipsoid Delay:</b> {row.get('delay_days', 0.0):+.1f} days"
-        for _, row in stars_df.iterrows()
-    ]
 
-    fig.add_trace(
-        go.Scatter3d(
-            x=xs,
-            y=ys,
-            z=zs,
-            mode="markers",
-            marker=dict(
-                size=5,
-                color=delays,
-                colorscale="Viridis",
-                colorbar=dict(title="Delay (days)"),
-                opacity=0.85,
-            ),
-            text=hover_texts,
-            hoverinfo="text",
-            name="Gaia DR3 Stars",
+    # Classification
+    shell_mask = np.abs(delays) <= 365.0
+    past_mask = delays < -365.0
+    future_mask = delays > 365.0
+
+    # Categorized traces for clear legend inspection
+    for mask, color, label_name, symbol in [
+        (past_mask, "#7c4dff", "Past Shell (Foreground / Light Passed)", "circle"),
+        (shell_mask, "#00e676", "ACTIVE SETI SHELL (On Surface ±1yr)", "diamond"),
+        (future_mask, "#ff5252", "Future Shell (Background / Not Arrived)", "circle"),
+    ]:
+        if not np.any(mask):
+            continue
+
+        df_sub = stars_df[mask]
+        sub_hover = [
+            f"<b>Star ID:</b> {row.get('source_id', 'N/A')}<br>"
+            f"<b>RA:</b> {row['ra']:.4f}° | <b>Dec:</b> {row['dec']:.4f}°<br>"
+            f"<b>Distance:</b> {row['dist_pc']:.1f} pc<br>"
+            f"<b>G mag:</b> {row.get('phot_g_mean_mag', 0.0):.2f}<br>"
+            f"<b>Ellipsoid Delay:</b> {row.get('delay_days', 0.0):+.1f} days"
+            for _, row in df_sub.iterrows()
+        ]
+
+        fig.add_trace(
+            go.Scatter3d(
+                x=xs[mask],
+                y=ys[mask],
+                z=zs[mask],
+                mode="markers",
+                marker=dict(
+                    size=8 if label_name.startswith("ACTIVE") else 4,
+                    color=color,
+                    symbol=symbol,
+                    opacity=0.9,
+                ),
+                text=sub_hover,
+                hoverinfo="text",
+                name=f"{label_name} ({sum(mask)})",
+            )
         )
-    )
 
-    # Dark template layout
     fig.update_layout(
         template="plotly_dark",
         title=dict(
-            text=f"🌌 SETI Ellipsoid 3D Interactive Visualization | {sn_name} ({obs_dt.strftime('%Y-%m-%d')})",
+            text=f"🌌 SETI Ellipsoid 3D Interactive Model | {sn_name} (Elapsed: {elapsed_years:.1f} yrs)",
             font=dict(size=16, color="#00e5ff"),
         ),
         scene=dict(
             xaxis=dict(title="X (parsecs)", backgroundcolor="#111", gridcolor="#333"),
             yaxis=dict(title="Y (parsecs)", backgroundcolor="#111", gridcolor="#333"),
             zaxis=dict(title="Z (parsecs)", backgroundcolor="#111", gridcolor="#333"),
-            aspectmode="data",
+            aspectmode="data",  # Preserves 1:1 isometric spatial proportions
+        ),
+        legend=dict(
+            yanchor="top",
+            y=0.99,
+            xanchor="left",
+            x=0.01,
+            bgcolor="rgba(0,0,0,0.6)",
         ),
         margin=dict(l=0, r=0, b=0, t=40),
     )
