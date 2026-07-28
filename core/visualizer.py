@@ -19,7 +19,7 @@ from config import (
     PARSEC_TO_LIGHT_YEAR,
     DAYS_PER_YEAR,
 )
-from core.geometry import spherical_to_cartesian, _parse_datetime
+from core.geometry import spherical_to_cartesian, calculate_ellipsoid_delay, _parse_datetime
 
 
 def _create_ellipsoid_mesh(
@@ -97,9 +97,25 @@ def generate_interactive_3d_ellipsoid(
     Renders Earth, Supernova focus, line of sight, target stars, and the active 3D SETI Ellipsoid shell.
     Includes enhanced camera controls (Pan, Zoom, Orbit, Resetting center).
     """
+    stars_df = stars_df.copy()
+
+    # Parse dates & compute elapsed time in years
     obs_dt = _parse_datetime(current_date)
     epoch_dt = _parse_datetime(sn_epoch)
     elapsed_years = (obs_dt - epoch_dt).total_seconds() / (86400.0 * DAYS_PER_YEAR)
+
+    # Automatically compute exact delay in days for all stars
+    delay_days = calculate_ellipsoid_delay(
+        ra_deg=stars_df["ra"],
+        dec_deg=stars_df["dec"],
+        dist_pc=stars_df["dist_pc"],
+        current_date=current_date,
+        sn_ra=sn_ra,
+        sn_dec=sn_dec,
+        sn_dist_pc=sn_dist_pc,
+        sn_epoch=sn_epoch,
+    )
+    stars_df["delay_days"] = delay_days
 
     xe, ye, ze = spherical_to_cartesian(sn_ra, sn_dec, sn_dist_pc)
     xs, ys, zs = spherical_to_cartesian(stars_df["ra"], stars_df["dec"], stars_df["dist_pc"])
@@ -165,11 +181,9 @@ def generate_interactive_3d_ellipsoid(
         print(f"Warning: Could not render ellipsoid mesh surface: {err}")
 
     # 5. Target Stars Scatter3d color-coded by ellipsoid status
-    delays = stars_df.get("delay_days", np.zeros(len(stars_df)))
-
-    shell_mask = np.abs(delays) <= 365.0
-    past_mask = delays < -365.0
-    future_mask = delays > 365.0
+    shell_mask = np.abs(delay_days) <= 365.0
+    past_mask = delay_days < -365.0
+    future_mask = delay_days > 365.0
 
     for mask, color, label_name, symbol in [
         (past_mask, "#7c4dff", "Past Shell (Foreground / Light Passed)", "circle"),
@@ -223,7 +237,7 @@ def generate_interactive_3d_ellipsoid(
                 eye=dict(x=1.25, y=1.25, z=1.25),
             ),
         ),
-        dragmode="turntable",  # Enables turntable 3D rotation
+        dragmode="turntable",
         legend=dict(
             yanchor="top",
             y=0.99,
@@ -240,7 +254,6 @@ def generate_interactive_3d_ellipsoid(
         os.makedirs("scratch", exist_ok=True)
         output_html = os.path.abspath(f"scratch/seti_ellipsoid_{sn_name.replace(' ', '_')}_3d.html")
 
-    # Write HTML with displayModeBar & scrollZoom enabled for full pan/zoom control
     fig.write_html(
         output_html,
         include_plotlyjs="cdn",
