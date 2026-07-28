@@ -1,8 +1,8 @@
 """
 Gaia DR3 Data Provider.
 
-Queries ESA Gaia DR3 via astroquery using ADQL to retrieve astrometric data
-and calculate stellar distances in parsecs. Includes mock support for offline testing.
+Queries ESA Gaia DR3 via pyvo using indexed ADQL to retrieve astrometric data
+and calculate stellar distances in parsecs. Includes mirror fallback and mock support.
 """
 
 from typing import Optional
@@ -10,6 +10,12 @@ import numpy as np
 import pandas as pd
 
 from config import DEFAULT_MAX_MAGNITUDE
+
+TAP_MIRRORS = [
+    ("https://gea.esac.esa.int/tap-server/tap", "gaiadr3.gaia_source"),
+    ("https://gaia.aip.de/tap", "gaiadr3.gaia_source"),
+    ("https://dc.g-vo.org/tap", "gaia.dr3_source"),
+]
 
 
 def _generate_mock_gaia_data(
@@ -22,7 +28,6 @@ def _generate_mock_gaia_data(
     np.random.seed(42)
     ra = ra_center + np.random.uniform(-radius_deg, radius_deg, row_limit)
     dec = dec_center + np.random.uniform(-radius_deg, radius_deg, row_limit)
-    # Parallax between 0.5 mas (2000 pc) and 20 mas (50 pc)
     parallax = np.random.uniform(0.5, 20.0, row_limit)
     dist_pc = 1000.0 / parallax
     phot_g_mean_mag = np.random.uniform(8.0, 15.5, row_limit)
@@ -53,18 +58,7 @@ def get_candidate_stars(
 ) -> pd.DataFrame:
     """
     Retrieves stellar candidates from Gaia DR3 around target spherical coordinates.
-
-    Args:
-        ra_center: Target Right Ascension in degrees.
-        dec_center: Target Declination in degrees.
-        radius_deg: Search cone radius in degrees.
-        max_magnitude: Maximum G-band magnitude threshold (faintest stars to include).
-        row_limit: Maximum number of rows to return from ADQL query.
-        use_mock: If True, returns mock data for offline testing without querying ESA servers.
-
-    Returns:
-        pandas.DataFrame with columns:
-        ['source_id', 'ra', 'dec', 'parallax', 'dist_pc', 'pmra', 'pmdec', 'phot_g_mean_mag']
+    Uses indexed RA/Dec bounding box for instant TAP query execution.
     """
     if use_mock:
         return _generate_mock_gaia_data(
@@ -74,38 +68,54 @@ def get_candidate_stars(
             row_limit=min(row_limit, 50),
         )
 
-    try:
-        from astroquery.gaia import Gaia
-    except ImportError as err:
-        raise ImportError(
-            "astroquery is required for Gaia queries. Install via pip install astroquery."
-        ) from err
+    # Compute bounding box using RA/Dec indexing for maximum TAP query speed
+    cos_dec = max(np.abs(np.cos(np.radians(dec_center))), 0.1)
+    ra_min = (ra_center - radius_deg / cos_dec) % 360.0
+    ra_max = (ra_center + radius_deg / cos_dec) % 360.0
+    dec_min = max(dec_center - radius_deg, -90.0)
+    dec_max = min(dec_center + radius_deg, 90.0)
 
-    adql_query = f"""
-    SELECT TOP {row_limit}
-        source_id, ra, dec, parallax, pmra, pmdec, phot_g_mean_mag
-    FROM gaiadr3.gaia_source
-    WHERE 1=CONTAINS(
-        POINT('ICRS', ra, dec),
-        CIRCLE('ICRS', {ra_center}, {dec_center}, {radius_deg})
-    )
-      AND parallax > 0.1
-      AND parallax_over_error > 5
-      AND phot_g_mean_mag <= {max_magnitude}
-    ORDER BY phot_g_mean_mag ASC
-    """
+    import pyvo as vo
 
-    job = Gaia.launch_job_async(adql_query)
-    results_table = job.get_results()
-    df = results_table.to_pandas()
+    last_error = None
+    for tap_url, table_name in TAP_MIRRORS:
+        try:
+            if ra_min < ra_max:
+                ra_clause = f"ra BETWEEN {ra_min:.6f} AND {ra_max:.6f}"
+            else:
+                ra_clause = f"(ra >= {ra_min:.6f} OR ra <= {ra_max:.6f})"
 
-    if df.empty:
-        df["dist_pc"] = []
-        return df
+            adql_query = f"""
+            SELECT TOP {row_limit}
+                source_id, ra, dec, parallax, pmra, pmdec, phot_g_mean_mag
+            FROM {table_name}
+            WHERE {ra_clause}
+              AND dec BETWEEN {dec_min:.6f} AND {dec_max:.6f}
+              AND parallax > 0.1
+              AND parallax_over_error > 3
+              AND phot_g_mean_mag <= {max_magnitude}
+            ORDER BY phot_g_mean_mag ASC
+            """
 
-    # Convert parallax (mas) to distance in parsecs (pc)
-    df["dist_pc"] = 1000.0 / df["parallax"]
+            service = vo.dal.TAPService(tap_url)
+            results = service.search(adql_query)
+            df = results.to_table().to_pandas()
 
-    return df[
-        ["source_id", "ra", "dec", "parallax", "dist_pc", "pmra", "pmdec", "phot_g_mean_mag"]
-    ]
+            if df.empty:
+                df["dist_pc"] = []
+                return df
+
+            df["parallax"] = df["parallax"].astype(float)
+            df["dist_pc"] = 1000.0 / df["parallax"]
+
+            cols = ["source_id", "ra", "dec", "parallax", "dist_pc", "pmra", "pmdec", "phot_g_mean_mag"]
+            for col in cols:
+                if col not in df.columns:
+                    df[col] = 0.0
+
+            return df[cols]
+        except Exception as err:
+            last_error = err
+            print(f"Warning: TAP Query to {tap_url} failed ({err}). Trying next mirror...")
+
+    raise RuntimeError(f"All Gaia DR3 TAP mirrors failed. Last error: {last_error}")
