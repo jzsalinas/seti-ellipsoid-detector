@@ -2,12 +2,12 @@
 SETI Ellipsoid 3D Geometric Engine.
 
 Calculates 3D spatial geometry and light travel time delays for stars relative to
-a supernova event (by default SN 1987A) to determine if target stars lie on the
-active SETI Ellipsoid surface shell.
+supernova and discrete cosmic anchors (pulsar glitches, magnetar giant flares)
+to determine single-shell and multi-anchor intersection candidates.
 """
 
 from datetime import datetime, timezone
-from typing import Tuple, Union
+from typing import Dict, List, Tuple, Union
 import numpy as np
 import pandas as pd
 
@@ -20,6 +20,7 @@ from config import (
     DAYS_PER_YEAR,
     DEFAULT_TOLERANCE_DAYS,
 )
+from core.anchor import CosmicAnchor
 
 
 def spherical_to_cartesian(
@@ -72,20 +73,8 @@ def calculate_ellipsoid_delay(
     """
     Calculates the deviation in days between the observation time and the exact time
     the supernova ellipsoid light shell reaches the star's position.
-
-    Formula:
-      d0 = Earth-to-Supernova distance
-      d1 = Earth-to-Star distance
-      d2 = Supernova-to-Star distance
-      Geometric delay (light years) = d1 + d2 - d0
-      Elapsed time since SN signal reached Earth (years) = (current_date - sn_epoch) / 365.2425 days
-      Delay (days) = (Geometric delay - Elapsed time) * 365.2425
-
-    Positive delay_days: Light shell has not reached star yet (in the future).
-    Negative delay_days: Light shell passed star in the past.
-    Near zero: Star is currently inside the ellipsoid shell.
     """
-    # 3D Position of Supernova
+    # 3D Position of Anchor
     xe, ye, ze = spherical_to_cartesian(sn_ra, sn_dec, sn_dist_pc)
 
     # 3D Position of Target Star(s)
@@ -128,9 +117,6 @@ def is_in_ellipsoid_shell(
 ) -> Tuple[Union[bool, np.ndarray, pd.Series], Union[float, np.ndarray, pd.Series]]:
     """
     Determines if star(s) are inside the active SETI Ellipsoid shell within tolerance_days.
-
-    Returns:
-      (is_inside, delay_days)
     """
     delay_days = calculate_ellipsoid_delay(
         ra_deg=ra_deg,
@@ -145,3 +131,116 @@ def is_in_ellipsoid_shell(
 
     is_inside = np.abs(delay_days) <= tolerance_days
     return is_inside, delay_days
+
+
+def calculate_multi_anchor_delays(
+    ra_deg: Union[float, np.ndarray, pd.Series],
+    dec_deg: Union[float, np.ndarray, pd.Series],
+    dist_pc: Union[float, np.ndarray, pd.Series],
+    current_date: Union[str, datetime],
+    anchors: List[CosmicAnchor],
+) -> pd.DataFrame:
+    """
+    Calculates ellipsoid light travel delays for a list of CosmicAnchors.
+
+    Returns a Pandas DataFrame where each column corresponds to an anchor's delay in days.
+    """
+    delays_dict = {}
+    for anchor in anchors:
+        col_name = f"delay_{anchor.id}"
+        delays_dict[col_name] = calculate_ellipsoid_delay(
+            ra_deg=ra_deg,
+            dec_deg=dec_deg,
+            dist_pc=dist_pc,
+            current_date=current_date,
+            sn_ra=anchor.ra_deg,
+            sn_dec=anchor.dec_deg,
+            sn_dist_pc=anchor.distance_pc,
+            sn_epoch=anchor.epoch,
+        )
+    return pd.DataFrame(delays_dict)
+
+
+def calculate_multi_anchor_rms_delay(
+    delays_df: pd.DataFrame,
+) -> Union[float, np.ndarray, pd.Series]:
+    """
+    Computes the Root Mean Square (RMS) deviation across N anchor delays.
+
+    Formula:
+      RMS_Delay = sqrt( (1 / N) * sum( delay_i^2 ) )
+    """
+    squared_sums = (delays_df ** 2).sum(axis=1)
+    n_anchors = delays_df.shape[1]
+    if n_anchors == 0:
+        return np.zeros(len(delays_df))
+    return np.sqrt(squared_sums / float(n_anchors))
+
+
+def find_multi_anchor_intersections(
+    df: pd.DataFrame,
+    current_date: Union[str, datetime],
+    anchors: List[CosmicAnchor],
+    tolerance_days: float = DEFAULT_TOLERANCE_DAYS,
+    min_anchors_hit: int = 2,
+    max_rms_days: Optional[float] = None,
+) -> pd.DataFrame:
+    """
+    Filters and scores target stars from a DataFrame that intersect multiple cosmic anchors.
+
+    Parameters:
+      df: DataFrame containing stellar coordinates ('ra', 'dec', and 'dist_pc' or 'distance_gspphot').
+      current_date: Observation epoch for calculation.
+      anchors: List of CosmicAnchor objects.
+      tolerance_days: Maximum absolute delay (in days) to consider a star on an anchor's shell.
+      min_anchors_hit: Minimum number of anchors a star must intersect simultaneously.
+      max_rms_days: Optional maximum threshold for overall multi-anchor RMS delay.
+
+    Returns:
+      DataFrame containing candidate stars with calculated delay columns, 'anchors_hit_count',
+      and 'rms_delay_days', filtered according to criteria.
+    """
+    df_out = df.copy()
+
+    # Normalize distance column name
+    if "dist_pc" in df_out.columns:
+        dist_series = df_out["dist_pc"]
+    elif "distance_gspphot" in df_out.columns:
+        dist_series = df_out["distance_gspphot"]
+    elif "distance_pc" in df_out.columns:
+        dist_series = df_out["distance_pc"]
+    else:
+        raise ValueError("DataFrame must contain 'dist_pc', 'distance_gspphot', or 'distance_pc'")
+
+    ra_series = df_out["ra"] if "ra" in df_out.columns else df_out["ra_deg"]
+    dec_series = df_out["dec"] if "dec" in df_out.columns else df_out["dec_deg"]
+
+    # Calculate delays for all anchors
+    delays_df = calculate_multi_anchor_delays(
+        ra_deg=ra_series,
+        dec_deg=dec_series,
+        dist_pc=dist_series,
+        current_date=current_date,
+        anchors=anchors,
+    )
+
+    # Count how many anchor shells each star falls inside
+    hits_matrix = np.abs(delays_df) <= tolerance_days
+    anchors_hit_count = hits_matrix.sum(axis=1)
+
+    # Calculate RMS delay across all anchors
+    rms_delay_days = calculate_multi_anchor_rms_delay(delays_df)
+
+    # Attach columns
+    for col in delays_df.columns:
+        df_out[col] = delays_df[col]
+
+    df_out["anchors_hit_count"] = anchors_hit_count
+    df_out["rms_delay_days"] = rms_delay_days
+
+    # Filter criteria
+    mask = df_out["anchors_hit_count"] >= min_anchors_hit
+    if max_rms_days is not None:
+        mask = mask & (df_out["rms_delay_days"] <= max_rms_days)
+
+    return df_out[mask].sort_values(by=["anchors_hit_count", "rms_delay_days"], ascending=[False, True])

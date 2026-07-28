@@ -23,7 +23,8 @@ from config import (
     PARSEC_TO_LIGHT_YEAR,
     DAYS_PER_YEAR,
 )
-from core.geometry import spherical_to_cartesian, calculate_ellipsoid_delay, _parse_datetime
+from core.geometry import spherical_to_cartesian, calculate_ellipsoid_delay, _parse_datetime, find_multi_anchor_intersections
+from core.anchor import CosmicAnchor, AnchorType
 
 
 def _create_ellipsoid_mesh(
@@ -629,4 +630,218 @@ def generate_multi_supernovae_3d_map(
         },
     )
     print(f"✅ Interactive Multi-Supernova 3D Map generated: {output_html}")
+    return output_html
+
+
+def generate_multi_anchor_3d_map(
+    anchors: List[CosmicAnchor],
+    stars_df: Optional[pd.DataFrame] = None,
+    current_date: Any = "2026-07-28T00:00:00",
+    tolerance_days: float = 30.0,
+    min_anchors_hit: int = 2,
+    output_html: Optional[str] = None,
+) -> str:
+    """
+    Generates a 3D Superposition & Intersection Map rendering multiple CosmicAnchors
+    (Supernovae, Pulsar Glitches, Magnetar Giant Flares) simultaneously around Earth.
+    Highlights candidate stars intersecting multiple active ellipsoid shells.
+    """
+    obs_dt = _parse_datetime(current_date)
+    current_year = obs_dt.year
+
+    fig = go.Figure()
+
+    # 1. Earth Focus at Origin (0,0,0)
+    fig.add_trace(
+        go.Scatter3d(
+            x=[0],
+            y=[0],
+            z=[0],
+            mode="markers+text",
+            marker=dict(size=12, color="#ffd700", symbol="circle", line=dict(color="#ffffff", width=2)),
+            text=["🌍 Earth (Observer)"],
+            textposition="top center",
+            name="Earth (Origin 0,0,0)",
+        )
+    )
+
+    # Color palette cycle for various anchors
+    palette = ["#00e5ff", "#ff007f", "#ffab00", "#00e676", "#b388ff", "#ff5252", "#1de9b6", "#e040fb"]
+    mesh_colors = [
+        "rgba(0, 229, 255, 0.20)",
+        "rgba(255, 0, 127, 0.20)",
+        "rgba(255, 171, 0, 0.20)",
+        "rgba(0, 230, 118, 0.20)",
+        "rgba(179, 136, 255, 0.20)",
+        "rgba(255, 82, 82, 0.20)",
+    ]
+
+    # Render Anchors & Meshes
+    for idx, anchor in enumerate(anchors):
+        color = palette[idx % len(palette)]
+        mesh_color = mesh_colors[idx % len(mesh_colors)]
+
+        xe, ye, ze = spherical_to_cartesian(anchor.ra_deg, anchor.dec_deg, anchor.distance_pc)
+        elapsed_years = (obs_dt - anchor.epoch).total_seconds() / (86400.0 * DAYS_PER_YEAR)
+
+        # Symbol & Emoji by AnchorType
+        type_icon = "💥"
+        if anchor.anchor_type == AnchorType.PULSAR_GLITCH:
+            type_icon = "⚡"
+        elif anchor.anchor_type == AnchorType.MAGNETAR_FLARE:
+            type_icon = "🧲"
+        elif anchor.anchor_type == AnchorType.BINARY_PERIASTRON:
+            type_icon = "🔄"
+
+        # Anchor Focus Marker
+        fig.add_trace(
+            go.Scatter3d(
+                x=[xe],
+                y=[ye],
+                z=[ze],
+                mode="markers+text",
+                marker=dict(size=11, color="#e0f7fa", symbol="circle", line=dict(color=color, width=2)),
+                text=[f"{type_icon} {anchor.name}"],
+                textposition="top center",
+                name=f"{anchor.name} ({anchor.distance_pc:.0f} pc)",
+            )
+        )
+
+        # Focal line Earth -> Anchor
+        fig.add_trace(
+            go.Scatter3d(
+                x=[0, xe],
+                y=[0, ye],
+                z=[0, ze],
+                mode="lines",
+                line=dict(color=color, width=1.5, dash="dash"),
+                name=f"Line of Sight: {anchor.id}",
+            )
+        )
+
+        # Ellipsoid Translucent Mesh
+        if elapsed_years > 0:
+            try:
+                X_m, Y_m, Z_m = _create_ellipsoid_mesh(xe, ye, ze, anchor.distance_pc, elapsed_years, n_points=35)
+                fig.add_trace(
+                    go.Surface(
+                        x=X_m,
+                        y=Y_m,
+                        z=Z_m,
+                        colorscale=[[0, mesh_color], [1, mesh_color]],
+                        showscale=False,
+                        name=f"Ellipsoid Mesh: {anchor.id} ({elapsed_years:.0f} yr)",
+                        hoverinfo="name",
+                        opacity=0.20,
+                    )
+                )
+            except Exception as err:
+                print(f"Warning: Could not render mesh for anchor {anchor.id}: {err}")
+
+    # Process & Plot Stellar Candidates
+    if stars_df is not None and not stars_df.empty:
+        dist_col = "dist_pc" if "dist_pc" in stars_df.columns else "distance_gspphot"
+        scored_df = find_multi_anchor_intersections(
+            stars_df,
+            current_date=current_date,
+            anchors=anchors,
+            tolerance_days=tolerance_days,
+            min_anchors_hit=min_anchors_hit,
+        )
+
+        # Base stars trace (inactive background)
+        xs_all, ys_all, zs_all = spherical_to_cartesian(stars_df["ra"], stars_df["dec"], stars_df[dist_col])
+        fig.add_trace(
+            go.Scatter3d(
+                x=xs_all,
+                y=ys_all,
+                z=zs_all,
+                mode="markers",
+                marker=dict(size=4, color="#555555", opacity=0.4),
+                name="Gaia DR3 Catalog Stars",
+                hoverinfo="none",
+            )
+        )
+
+        # Highlighted multi-anchor intersection candidates
+        if not scored_df.empty:
+            xs_hit, ys_hit, zs_hit = spherical_to_cartesian(scored_df["ra"], scored_df["dec"], scored_df[dist_col])
+            hover_texts = [
+                f"<b>⭐ CANDIDATE STAR:</b> {row.get('source_id', 'N/A')}<br>"
+                f"<b>RA:</b> {row['ra']:.4f}° | <b>Dec:</b> {row['dec']:.4f}°<br>"
+                f"<b>Distance:</b> {row[dist_col]:.1f} pc<br>"
+                f"<b>Anchors Hit:</b> {row['anchors_hit_count']} / {len(anchors)}<br>"
+                f"<b>RMS Delay:</b> {row['rms_delay_days']:.1f} days"
+                for _, row in scored_df.iterrows()
+            ]
+
+            fig.add_trace(
+                go.Scatter3d(
+                    x=xs_hit,
+                    y=ys_hit,
+                    z=zs_hit,
+                    mode="markers+text",
+                    marker=dict(
+                        size=9,
+                        color="#00e676",
+                        symbol="diamond",
+                        line=dict(color="#ffffff", width=2),
+                    ),
+                    text=[f"Hit ({r['anchors_hit_count']})" for _, r in scored_df.iterrows()],
+                    textposition="top right",
+                    hovertext=hover_texts,
+                    hoverinfo="text",
+                    name=f"Multi-Anchor Candidates (Hits >= {min_anchors_hit})",
+                )
+            )
+
+    fig.update_layout(
+        template="plotly_dark",
+        title=dict(
+            text=f"🛰️ Multi-Cosmic-Anchor (Supernovae + Pulsars) 3D Intersection Map | ({current_year})",
+            font=dict(size=16, color="#00e5ff"),
+        ),
+        scene=dict(
+            xaxis=dict(title="X (parsecs)", backgroundcolor="#111", gridcolor="#333"),
+            yaxis=dict(title="Y (parsecs)", backgroundcolor="#111", gridcolor="#333"),
+            zaxis=dict(title="Z (parsecs)", backgroundcolor="#111", gridcolor="#333"),
+            aspectmode="data",
+            camera=dict(
+                up=dict(x=0, y=0, z=1),
+                eye=dict(x=1.5, y=1.5, z=1.2),
+            ),
+        ),
+        dragmode="turntable",
+        legend=dict(
+            yanchor="top",
+            y=0.99,
+            xanchor="left",
+            x=0.01,
+            bgcolor="rgba(0,0,0,0.8)",
+            bordercolor="rgba(0,229,255,0.4)",
+            borderwidth=1,
+        ),
+        margin=dict(l=0, r=0, b=0, t=40),
+    )
+
+    if output_html is None:
+        os.makedirs("scratch", exist_ok=True)
+        output_html = os.path.abspath("scratch/seti_multi_anchor_3d_map.html")
+
+    fig.write_html(
+        output_html,
+        include_plotlyjs="cdn",
+        config={
+            "scrollZoom": True,
+            "displayModeBar": True,
+            "displaylogo": False,
+            "modeBarButtonsToAdd": [
+                "pan3d",
+                "orbit3d",
+                "table3d",
+                "resetCameraDefault3d",
+            ],
+        },
+    )
+    print(f"✅ Interactive Multi-Anchor 3D Intersection Map generated: {output_html}")
     return output_html
