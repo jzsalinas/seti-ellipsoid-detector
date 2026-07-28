@@ -3,6 +3,11 @@ Configuration parameters for the SETI Ellipsoid Detector.
 """
 
 from datetime import datetime, timezone
+import os
+from dotenv import load_dotenv
+
+# Automatically load environment variables from .env file if present
+load_dotenv()
 
 # --- Physical & Astronomical Constants ---
 PARSEC_TO_LIGHT_YEAR: float = 3.261563777
