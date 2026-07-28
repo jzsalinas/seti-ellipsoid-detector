@@ -39,7 +39,9 @@ scratch/
 .env
 .env.local
 
-# IDEs
+# IDEs & Agent Memory
 .vscode/
 .idea/
 *.swp
+.agents/
+AGENTS.md
