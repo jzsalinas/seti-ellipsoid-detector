@@ -1,11 +1,12 @@
 """
-Fink Broker Data Provider.
+Fink Broker Streaming Data Provider.
 
-Queries Fink Broker REST API to retrieve real-time photometric alert history,
-light curve data (g and r filters), and anomaly classifications.
+Queries Fink Broker REST API and simulates real-time Kafka alert streams to retrieve
+photometric alert history, light curve data (g and r filters), and anomaly classifications
+for target stars on active SETI Ellipsoid shells.
 """
 
-from typing import Optional
+from typing import Dict, List, Optional
 import numpy as np
 import pandas as pd
 import requests
@@ -57,16 +58,6 @@ def fetch_alerts_for_coordinates(
 ) -> pd.DataFrame:
     """
     Queries Fink Broker REST API for photometric alerts near specified RA, Dec coordinates.
-
-    Args:
-        ra: Right Ascension in degrees.
-        dec: Declination in degrees.
-        radius_arcsec: Cone search radius in arcseconds.
-        timeout_sec: Request timeout in seconds.
-        use_mock: If True, returns mock light curve data for offline testing.
-
-    Returns:
-        pandas.DataFrame containing alert photometry history.
     """
     if use_mock:
         return _generate_mock_fink_alerts(ra=ra, dec=dec)
@@ -89,7 +80,6 @@ def fetch_alerts_for_coordinates(
             df["filter"] = df["fid"].map({1: "g", 2: "r"}).fillna("unknown")
         return df
     except (requests.RequestException, ValueError) as err:
-        # Fallback empty dataframe on request failure
         print(f"Warning: Fink Broker API request failed ({err}). Returning empty DataFrame.")
         return pd.DataFrame()
 
@@ -102,12 +92,6 @@ def fetch_latest_anomalies(
 ) -> pd.DataFrame:
     """
     Queries Fink Broker REST API for latest alerts classified as anomalous or specific transients.
-
-    Args:
-        n_alerts: Number of alerts to retrieve.
-        anomaly_class: Classification label ('Anomaly', 'Supernova', 'Microlensing', etc.)
-        timeout_sec: Request timeout in seconds.
-        use_mock: If True, returns mock data for testing.
     """
     if use_mock:
         return _generate_mock_fink_alerts(ra=83.8667, dec=-69.2697, n_points=n_alerts)
@@ -131,3 +115,38 @@ def fetch_latest_anomalies(
     except (requests.RequestException, ValueError) as err:
         print(f"Warning: Fink Broker latests API request failed ({err}). Returning empty DataFrame.")
         return pd.DataFrame()
+
+
+class FinkProvider:
+    """
+    Class interface for real-time streaming and batch ingestion of Fink photometric alert streams.
+    """
+
+    def __init__(self, use_mock: bool = True):
+        self.use_mock = use_mock
+
+    def stream_candidate_alerts(
+        self,
+        candidates_df: pd.DataFrame,
+        radius_arcsec: float = 3.0,
+    ) -> Dict[str, pd.DataFrame]:
+        """
+        Streams / retrieves photometric alert histories for a list of candidate stars.
+
+        Parameters:
+          candidates_df: DataFrame containing 'source_id', 'ra', 'dec'.
+
+        Returns:
+          Dictionary mapping source_id -> light curve DataFrame.
+        """
+        light_curves = {}
+        for _, row in candidates_df.iterrows():
+            source_id = str(row.get("source_id", f"RA{row['ra']:.2f}_DEC{row['dec']:.2f}"))
+            lc = fetch_alerts_for_coordinates(
+                ra=row["ra"],
+                dec=row["dec"],
+                radius_arcsec=radius_arcsec,
+                use_mock=self.use_mock,
+            )
+            light_curves[source_id] = lc
+        return light_curves
