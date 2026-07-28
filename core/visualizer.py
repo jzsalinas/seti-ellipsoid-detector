@@ -174,6 +174,7 @@ def generate_interactive_3d_ellipsoid(
     obs_dt = _parse_datetime(current_date)
     epoch_dt = _parse_datetime(sn_epoch)
     elapsed_years_base = (obs_dt - epoch_dt).total_seconds() / (86400.0 * DAYS_PER_YEAR)
+    current_year = obs_dt.year
 
     # Compute base delay in days for current date
     delay_days_base = calculate_ellipsoid_delay(
@@ -237,19 +238,20 @@ def generate_interactive_3d_ellipsoid(
         )
     )
 
-    # Time Steps for Slider (Time Evolution of Ellipsoid)
+    # Time Evolution Steps for Slider (Label, year_offset, tol_days)
     time_steps = [
-        ("Present Day (2026)", 0.0, 365.25),
-        ("+10 Years", 10.0, 365.25),
-        ("+50 Years", 50.0, 1826.25),
-        ("+100 Years", 100.0, 3652.5),
-        ("+500 Years", 500.0, 18262.5),
-        ("-50 Years", -50.0, 1826.25),
+        (f"Present Day ({current_year}) [±1 yr]", 0.0, 365.25),
+        (f"+10 Years ({current_year+10}) [±1 yr]", 10.0, 365.25),
+        (f"+50 Years ({current_year+50}) [±5 yr]", 50.0, 1826.25),
+        (f"+100 Years ({current_year+100}) [±10 yr]", 100.0, 3652.5),
+        (f"+500 Years ({current_year+500}) [±50 yr]", 500.0, 18262.5),
+        (f"+500 Years Wide ({current_year+500}) [±250 yr]", 500.0, 91310.6),
+        (f"-50 Years ({current_year-50}) [±5 yr]", -50.0, 1826.25),
     ]
 
     base_trace_count = 3
     num_steps = len(time_steps)
-    traces_per_step = 6  # [Surface Mesh, Past Stars, Active Stars, Future Stars, Surface Rings, Projection Vectors]
+    traces_per_step = 6
 
     for step_idx, (step_label, year_offset, tol_days) in enumerate(time_steps):
         target_elapsed_years = elapsed_years_base + year_offset
@@ -360,7 +362,6 @@ def generate_interactive_3d_ellipsoid(
                 xs_arr[shell_mask], ys_arr[shell_mask], zs_arr[shell_mask]
             )
 
-            # Surface Latitude Rings
             fig.add_trace(
                 go.Scatter3d(
                     x=rx,
@@ -374,7 +375,6 @@ def generate_interactive_3d_ellipsoid(
                 )
             )
 
-            # Projection Vectors (Dotted lines star -> surface)
             fig.add_trace(
                 go.Scatter3d(
                     x=vx,
@@ -427,7 +427,7 @@ def generate_interactive_3d_ellipsoid(
     fig.update_layout(
         template="plotly_dark",
         title=dict(
-            text=f"🌌 SETI Ellipsoid 3D Dynamic Model | {sn_name} | Epoch: Present Day (2026)",
+            text=f"🌌 SETI Ellipsoid 3D Dynamic Model | {sn_name} | Epoch: Present Day ({current_year}) [±1 yr]",
             font=dict(size=16, color="#00e5ff"),
         ),
         scene=dict(
@@ -473,5 +473,5 @@ def generate_interactive_3d_ellipsoid(
             ],
         },
     )
-    print(f"✅ Interactive 3D visualization with dynamic expanding mesh generated: {output_html}")
+    print(f"✅ Interactive 3D visualization generated: {output_html}")
     return output_html
