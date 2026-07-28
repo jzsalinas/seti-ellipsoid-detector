@@ -19,6 +19,7 @@ Registro histórico centralizado de pruebas de campo, experimentos en vivo y ben
 | **EXP-009** | 2026-07-28 19:25 | `phase-6` | Fink Broker Real-Time Alert Streaming & Photometric Anomaly Monitoring | ✅ Completed | [009_fink_streaming_benchmark.md](benchmarks/009_fink_streaming_benchmark.md) |
 | **EXP-010** | 2026-07-28 19:31 | `phase-6` | Breakthrough Listen Open Data Radio Technosignature & Doppler Drift Benchmark | ✅ Completed | [010_breakthrough_listen_benchmark.md](benchmarks/010_breakthrough_listen_benchmark.md) |
 | **EXP-011** | 2026-07-28 19:43 | `phase-6` | APF / Lick Observatory Pulsed Optical Laser Technosignature Benchmark | ✅ Completed | [011_pulsed_optical_benchmark.md](benchmarks/011_pulsed_optical_benchmark.md) |
+| **EXP-012** | 2026-07-28 19:49 | `phase-6` | SETI Ellipsoid Candidate Master Catalog & Multilayer Priority Pipeline | ✅ Completed | [012_master_catalog_benchmark.md](benchmarks/012_master_catalog_benchmark.md) |
 
 ---
 
