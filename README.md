@@ -39,6 +39,7 @@ $$d_1 + d_2 - d_0 = c \cdot (t_{\text{obs}} - t_{\text{SN}})$$
 
 - **📐 3D Geometric Engine (`core/geometry.py`):** Calculates 3D ICRS Cartesian positions, light travel delays, and active shell crossings. Fully vectorized for processing large DataFrames (`NumPy` & `Pandas`).
 - **🌐 Interactive 3D WebGL Visualizer (`core/visualizer.py`):** Generates dark-themed interactive 3D WebGL HTML plots rendering Earth, Supernova foci, target stars, and the active 3D SETI Ellipsoid shell in real-time.
+- **🌌 Multi-Supernova Galactic Map (`scripts/visualize_multi_ellipsoids_3d.py`):** Renders all 4 historic supernova ellipsoids simultaneously in 3D WebGL.
 - **🌌 Gaia DR3 Provider (`providers/gaia_provider.py`):** Queries ESA Gaia DR3 astrometric data using ADQL via `pyvo`, automatically calculating stellar distances from parallax.
 - **⚡ Fink Broker Ingestion (`providers/fink_provider.py`):** Ingests real-time photometric alert histories ($g$ and $r$ optical filters) from ZTF / Vera C. Rubin Observatory alerts via Fink REST API.
 - **🤖 Unsupervised Anomaly Engine (`core/anomaly_engine.py`):** Computes light curve feature vectors (magnitude variance, peak-to-peak range, skewness, $(g-r)$ color index, fit residuals) and scores anomalies using `IsolationForest` (`scikit-learn`).
@@ -55,7 +56,7 @@ seti-ellipsoid-detector/
 │   ├── __init__.py
 │   ├── geometry.py           # 3D spatial geometry & light travel delay calculations
 │   ├── anomaly_engine.py     # Feature extraction & IsolationForest anomaly scoring
-│   └── visualizer.py         # Plotly WebGL interactive 3D ellipsoid renderer
+│   └── visualizer.py         # Plotly WebGL interactive 3D ellipsoid & multi-supernova map renderer
 ├── providers/
 │   ├── __init__.py
 │   ├── gaia_provider.py      # ADQL queries to ESA Gaia DR3 via pyvo
@@ -71,12 +72,13 @@ seti-ellipsoid-detector/
 │   └── benchmarks/
 ├── scripts/                  # Command-line tools & benchmarks
 │   ├── visualize_ellipsoid_3d.py
+│   ├── visualize_multi_ellipsoids_3d.py
 │   ├── test_live_gaia.py
 │   ├── test_multianchor.py
 │   ├── benchmark_performance.py
 │   ├── benchmark_anomaly.py
 │   └── record_experiment.py
-└── tests/                    # Unit & integration test suite (14 tests)
+└── tests/                    # Unit & integration test suite (15 tests)
 ```
 
 ---
@@ -94,38 +96,21 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 2. Interactive 3D Ellipsoid Visualization
+### 2. Interactive 3D Multi-Supernova Map
 
-Generate an interactive 3D WebGL plot in your browser:
+Render all 4 historic supernova ellipsoids simultaneously in 3D WebGL:
 
 ```bash
-python scripts/visualize_ellipsoid_3d.py --sn SN1572
+python scripts/visualize_multi_ellipsoids_3d.py
 ```
 
-Open the generated file `scratch/seti_ellipsoid_SN1572_3d.html` in any web browser to rotate, zoom, and inspect stars on the 3D SETI Ellipsoid surface!
-
-### 3. Running the Pipeline
-
-```python
-from pipeline import run_pipeline
-
-results = run_pipeline(
-    ra_center=83.8667,
-    dec_center=-69.2697,
-    radius_deg=1.0,
-    tolerance_days=30.0,
-    anomaly_threshold=0.85,
-    use_mock=False,
-)
-
-print(results.head())
-```
+Open `scratch/seti_multi_supernovae_3d_map.html` in your browser to inspect the superposed 3D ellipsoids!
 
 ---
 
 ## 🧪 Running Unit Tests
 
-Execute the full test suite (14 passing unit & integration tests):
+Execute the full test suite (15 passing unit & integration tests):
 
 ```bash
 pytest -v

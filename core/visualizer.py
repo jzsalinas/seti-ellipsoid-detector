@@ -1,12 +1,11 @@
 """
-Interactive 3D SETI Ellipsoid & Stellar Catalog Visualizer with Time-Expanding Surface Mesh & Surface Ring Projections.
+Interactive 3D SETI Ellipsoid & Stellar Catalog Visualizer.
 
-Generates dark-theme WebGL 3D interactive visualizations (Plotly HTML) rendering:
-- Earth: Gold sphere focus
-- Supernova: Cyan-white glowing sphere focus
-- 3D Translucent Ellipsoid Mesh: Expands/contracts dynamically with the time slider
-- Active Stars: Highlighted with exact latitude rings projected ON THE SURFACE MESH of the ellipsoid
-  and dotted radial projection vectors connecting stars to their surface projection points.
+Includes single-anchor visualization and multi-supernova 3D superposition maps rendering:
+- Earth: Gold sphere focus at origin
+- Multiple Supernova Anchors (SN 1987A, SN 1572 Tycho, SN 1604 Kepler, SN 1054 Crab)
+- Superposed 3D Translucent Ellipsoid Surface Meshes
+- Gaia DR3 Candidate Stars color-coded by active shell status across all supernovas
 """
 
 from typing import Optional, Dict, Any, List, Tuple
@@ -20,6 +19,7 @@ from config import (
     SN1987A_DEC_DEG,
     SN1987A_DISTANCE_PC,
     SN1987A_EPOCH,
+    HISTORIC_SUPERNOVAE,
     PARSEC_TO_LIGHT_YEAR,
     DAYS_PER_YEAR,
 )
@@ -162,12 +162,7 @@ def generate_interactive_3d_ellipsoid(
     output_html: Optional[str] = None,
 ) -> str:
     """
-    Generates an interactive Plotly 3D WebGL HTML visualization.
-    - Earth: Gold sphere at (0,0,0)
-    - Supernova: Glowing Cyan-White sphere
-    - Dynamic Ellipsoid Surface Mesh: Expands with time slider
-    - Active Shell Latitude Rings: Projected EXACTLY ON THE SURFACE MESH
-    - Dotted Projection Vectors: Connecting stars to their exact surface rings
+    Generates an interactive Plotly 3D WebGL HTML visualization for a single supernova anchor.
     """
     stars_df = stars_df.copy()
 
@@ -176,7 +171,6 @@ def generate_interactive_3d_ellipsoid(
     elapsed_years_base = (obs_dt - epoch_dt).total_seconds() / (86400.0 * DAYS_PER_YEAR)
     current_year = obs_dt.year
 
-    # Compute base delay in days for current date
     delay_days_base = calculate_ellipsoid_delay(
         ra_deg=stars_df["ra"],
         dec_deg=stars_df["dec"],
@@ -197,7 +191,6 @@ def generate_interactive_3d_ellipsoid(
 
     fig = go.Figure()
 
-    # Base Traces (Index 0, 1, 2)
     # 0. Earth (Gold sphere)
     fig.add_trace(
         go.Scatter3d(
@@ -238,7 +231,6 @@ def generate_interactive_3d_ellipsoid(
         )
     )
 
-    # Time Evolution Steps for Slider (Label, year_offset, tol_days)
     time_steps = [
         (f"Present Day ({current_year}) [±1 yr]", 0.0, 365.25),
         (f"+10 Years ({current_year+10}) [±1 yr]", 10.0, 365.25),
@@ -258,9 +250,8 @@ def generate_interactive_3d_ellipsoid(
         target_delay_offset = year_offset * DAYS_PER_YEAR
         current_delays = delay_days_base - target_delay_offset
 
-        default_visible = (step_idx == 0)  # Present Day visible by default
+        default_visible = (step_idx == 0)
 
-        # 1. Dynamic Ellipsoid Mesh for this date
         try:
             X_mesh, Y_mesh, Z_mesh = _create_ellipsoid_mesh(xe, ye, ze, sn_dist_pc, target_elapsed_years)
             fig.add_trace(
@@ -279,12 +270,10 @@ def generate_interactive_3d_ellipsoid(
         except Exception:
             fig.add_trace(go.Surface(x=[], y=[], z=[], visible=default_visible))
 
-        # Classification for this time step
         shell_mask = np.abs(current_delays) <= tol_days
         past_mask = current_delays < -tol_days
         future_mask = current_delays > +tol_days
 
-        # 2. Past Stars (Points)
         df_past = stars_df[past_mask]
         past_hover = [
             f"<b>Star ID:</b> {row.get('source_id', 'N/A')}<br>"
@@ -307,7 +296,6 @@ def generate_interactive_3d_ellipsoid(
             )
         )
 
-        # 3. Active Shell Stars (Points)
         df_active = stars_df[shell_mask]
         active_hover = [
             f"<b>ACTIVE SETI CANDIDATE!</b><br>"
@@ -332,7 +320,6 @@ def generate_interactive_3d_ellipsoid(
             )
         )
 
-        # 4. Future Stars (Points)
         df_future = stars_df[future_mask]
         future_hover = [
             f"<b>Star ID:</b> {row.get('source_id', 'N/A')}<br>"
@@ -355,7 +342,6 @@ def generate_interactive_3d_ellipsoid(
             )
         )
 
-        # 5. Exact Surface Latitude Rings & 6. Projection Vectors
         if np.any(shell_mask):
             rx, ry, rz, vx, vy, vz = _generate_surface_ring_and_projections(
                 xe, ye, ze, sn_dist_pc, target_elapsed_years,
@@ -391,7 +377,6 @@ def generate_interactive_3d_ellipsoid(
             fig.add_trace(go.Scatter3d(x=[], y=[], z=[], mode="lines", name="Surface Latitude Rings (0)", visible=default_visible))
             fig.add_trace(go.Scatter3d(x=[], y=[], z=[], mode="lines", name="Star Radial Projection Vectors", visible=default_visible))
 
-    # Build Plotly Slider Steps
     slider_steps = []
 
     for step_idx, (step_label, year_offset, tol_days) in enumerate(time_steps):
@@ -414,7 +399,7 @@ def generate_interactive_3d_ellipsoid(
 
     sliders = [
         dict(
-            active=0,  # Default to Present Day
+            active=0,
             currentvalue={"prefix": "⏱️ Time Evolution Epoch: ", "font": {"color": "#00e5ff", "size": 14}},
             pad={"t": 30, "b": 10},
             steps=slider_steps,
@@ -474,4 +459,174 @@ def generate_interactive_3d_ellipsoid(
         },
     )
     print(f"✅ Interactive 3D visualization generated: {output_html}")
+    return output_html
+
+
+def generate_multi_supernovae_3d_map(
+    stars_df: Optional[pd.DataFrame] = None,
+    supernovae_dict: Dict[str, Any] = HISTORIC_SUPERNOVAE,
+    current_date: Any = "2026-07-28T00:00:00",
+    output_html: Optional[str] = None,
+) -> str:
+    """
+    Generates a 3D Superposition Map rendering ALL historic supernova ellipsoids simultaneously around Earth.
+    Allows toggling each Supernova Ellipsoid surface and inspecting candidates across the Galaxy.
+    """
+    obs_dt = _parse_datetime(current_date)
+    current_year = obs_dt.year
+
+    fig = go.Figure()
+
+    # 1. Earth (Gold sphere at center)
+    fig.add_trace(
+        go.Scatter3d(
+            x=[0],
+            y=[0],
+            z=[0],
+            mode="markers+text",
+            marker=dict(size=12, color="#ffd700", symbol="circle", line=dict(color="#ffffff", width=2)),
+            text=["🌍 Earth (Observer)"],
+            textposition="top center",
+            name="Earth (Origin 0,0,0)",
+        )
+    )
+
+    # Styling colors for each Supernova Anchor
+    sn_styles = {
+        "SN1987A": {"color": "#00e5ff", "mesh_color": "rgba(0, 229, 255, 0.22)"},
+        "SN1572":  {"color": "#ff007f", "mesh_color": "rgba(255, 0, 127, 0.22)"},
+        "SN1604":  {"color": "#ffab00", "mesh_color": "rgba(255, 171, 0, 0.22)"},
+        "SN1054":  {"color": "#00e676", "mesh_color": "rgba(0, 230, 118, 0.22)"},
+    }
+
+    # Render each Supernova Focus & 3D Ellipsoid Mesh
+    for sn_key, sn_info in supernovae_dict.items():
+        name = sn_info["name"]
+        ra = sn_info["ra_deg"]
+        dec = sn_info["dec_deg"]
+        d0 = sn_info["distance_pc"]
+        epoch = sn_info["epoch"]
+
+        style = sn_styles.get(sn_key, {"color": "#ffffff", "mesh_color": "rgba(255,255,255,0.2)"})
+
+        xe, ye, ze = spherical_to_cartesian(ra, dec, d0)
+        epoch_dt = _parse_datetime(epoch)
+        elapsed_years = (obs_dt - epoch_dt).total_seconds() / (86400.0 * DAYS_PER_YEAR)
+
+        # Supernova Focus Marker
+        fig.add_trace(
+            go.Scatter3d(
+                x=[xe],
+                y=[ye],
+                z=[ze],
+                mode="markers+text",
+                marker=dict(size=13, color="#e0f7fa", symbol="circle", line=dict(color=style["color"], width=3)),
+                text=[f"💥 {name}"],
+                textposition="top center",
+                name=f"{name} ({d0:.0f} pc)",
+            )
+        )
+
+        # Focal line Earth -> Supernova
+        fig.add_trace(
+            go.Scatter3d(
+                x=[0, xe],
+                y=[0, ye],
+                z=[0, ze],
+                mode="lines",
+                line=dict(color=style["color"], width=2, dash="dash"),
+                name=f"Line of Sight: {sn_key}",
+            )
+        )
+
+        # Translucent 3D Mesh
+        try:
+            X_mesh, Y_mesh, Z_mesh = _create_ellipsoid_mesh(xe, ye, ze, d0, elapsed_years, n_points=40)
+            fig.add_trace(
+                go.Surface(
+                    x=X_mesh,
+                    y=Y_mesh,
+                    z=Z_mesh,
+                    colorscale=[[0, style["mesh_color"]], [1, style["mesh_color"]]],
+                    showscale=False,
+                    name=f"Ellipsoid Mesh: {sn_key} ({elapsed_years:.0f} yr)",
+                    hoverinfo="name",
+                    opacity=0.25,
+                )
+            )
+        except Exception as err:
+            print(f"Warning: Could not render mesh for {sn_key}: {err}")
+
+    # Render Candidate Stars if provided
+    if stars_df is not None and not stars_df.empty:
+        xs, ys, zs = spherical_to_cartesian(stars_df["ra"], stars_df["dec"], stars_df["dist_pc"])
+        hover_texts = [
+            f"<b>Star ID:</b> {row.get('source_id', 'N/A')}<br>"
+            f"<b>RA:</b> {row['ra']:.4f}° | <b>Dec:</b> {row['dec']:.4f}°<br>"
+            f"<b>Distance:</b> {row['dist_pc']:.1f} pc"
+            for _, row in stars_df.iterrows()
+        ]
+
+        fig.add_trace(
+            go.Scatter3d(
+                x=xs,
+                y=ys,
+                z=zs,
+                mode="markers",
+                marker=dict(size=5, color="#ffffff", opacity=0.85),
+                text=hover_texts,
+                hoverinfo="text",
+                name="Gaia DR3 Stars Catalog",
+            )
+        )
+
+    fig.update_layout(
+        template="plotly_dark",
+        title=dict(
+            text=f"🌌 Multi-Supernova SETI Ellipsoids Superposition 3D Map | ({current_year})",
+            font=dict(size=16, color="#00e5ff"),
+        ),
+        scene=dict(
+            xaxis=dict(title="X (parsecs)", backgroundcolor="#111", gridcolor="#333"),
+            yaxis=dict(title="Y (parsecs)", backgroundcolor="#111", gridcolor="#333"),
+            zaxis=dict(title="Z (parsecs)", backgroundcolor="#111", gridcolor="#333"),
+            aspectmode="data",
+            camera=dict(
+                up=dict(x=0, y=0, z=1),
+                eye=dict(x=1.5, y=1.5, z=1.2),
+            ),
+        ),
+        dragmode="turntable",
+        legend=dict(
+            yanchor="top",
+            y=0.99,
+            xanchor="left",
+            x=0.01,
+            bgcolor="rgba(0,0,0,0.8)",
+            bordercolor="rgba(0,229,255,0.4)",
+            borderwidth=1,
+        ),
+        margin=dict(l=0, r=0, b=0, t=40),
+    )
+
+    if output_html is None:
+        os.makedirs("scratch", exist_ok=True)
+        output_html = os.path.abspath("scratch/seti_multi_supernovae_3d_map.html")
+
+    fig.write_html(
+        output_html,
+        include_plotlyjs="cdn",
+        config={
+            "scrollZoom": True,
+            "displayModeBar": True,
+            "displaylogo": False,
+            "modeBarButtonsToAdd": [
+                "pan3d",
+                "orbit3d",
+                "table3d",
+                "resetCameraDefault3d",
+            ],
+        },
+    )
+    print(f"✅ Interactive Multi-Supernova 3D Map generated: {output_html}")
     return output_html

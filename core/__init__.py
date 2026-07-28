@@ -8,7 +8,7 @@ from .geometry import (
     is_in_ellipsoid_shell,
 )
 from .anomaly_engine import AnomalyEvaluator
-from .visualizer import generate_interactive_3d_ellipsoid
+from .visualizer import generate_interactive_3d_ellipsoid, generate_multi_supernovae_3d_map
 
 __all__ = [
     "spherical_to_cartesian",
@@ -16,4 +16,5 @@ __all__ = [
     "is_in_ellipsoid_shell",
     "AnomalyEvaluator",
     "generate_interactive_3d_ellipsoid",
+    "generate_multi_supernovae_3d_map",
 ]
