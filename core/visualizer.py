@@ -1,11 +1,12 @@
 """
-Interactive 3D SETI Ellipsoid & Stellar Catalog Visualizer.
+Interactive 3D SETI Ellipsoid & Stellar Catalog Visualizer with Dynamic Tolerance Slider.
 
 Generates dark-theme WebGL 3D interactive visualizations (Plotly HTML) rendering
-Earth, Supernova foci, target stars, line of sight, and the active 3D SETI Ellipsoid shell.
+Earth, Supernova foci, target stars, line of sight, active 3D SETI Ellipsoid shell,
+and an interactive slider to dynamically adjust shell tolerance (±30d to ±50 years).
 """
 
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 import os
 import numpy as np
 import pandas as pd
@@ -32,20 +33,17 @@ def _create_ellipsoid_mesh(
     path_diff_pc = path_diff_ly / PARSEC_TO_LIGHT_YEAR
 
     a = (d0 + path_diff_pc) / 2.0  # Semi-major axis
-    c_foci = d0 / 2.0               # Focal distance (half distance between Earth and SN)
+    c_foci = d0 / 2.0               # Focal distance
     b = np.sqrt(max(a ** 2 - c_foci ** 2, 1.0))  # Semi-minor axis
 
-    # Parametric sphere mesh
     u = np.linspace(0, 2 * np.pi, n_points)
     v = np.linspace(0, np.pi, n_points)
     U, V = np.meshgrid(u, v)
 
-    # Standard unrotated ellipsoid with major axis along X
     x_std = a * np.sin(V) * np.cos(U)
     y_std = b * np.sin(V) * np.sin(U)
     z_std = b * np.cos(V)
 
-    # Rotation matrix R mapping (1,0,0) to normalized Supernova direction vector
     sn_vec = np.array([xe, ye, ze])
     norm_sn = np.linalg.norm(sn_vec)
     v_target = sn_vec / norm_sn if norm_sn > 0 else np.array([1.0, 0.0, 0.0])
@@ -68,10 +66,8 @@ def _create_ellipsoid_mesh(
         )
         R = np.eye(3) + K * sin_angle + np.dot(K, K) * (1 - cos_angle)
 
-    # Center of ellipsoid is midpoint between Earth (0,0,0) and Supernova (xe, ye, ze)
     center = sn_vec / 2.0
 
-    # Apply rotation and translation
     pts = np.stack([x_std.flatten(), y_std.flatten(), z_std.flatten()], axis=0)
     pts_rot = np.dot(R, pts)
 
@@ -93,18 +89,17 @@ def generate_interactive_3d_ellipsoid(
     output_html: Optional[str] = None,
 ) -> str:
     """
-    Generates an interactive Plotly 3D WebGL HTML visualization.
-    Renders Earth, Supernova focus, line of sight, target stars, and the active 3D SETI Ellipsoid shell.
-    Includes enhanced camera controls (Pan, Zoom, Orbit, Resetting center).
+    Generates an interactive Plotly 3D WebGL HTML visualization with dynamic tolerance sliders.
+    Renders Earth, Supernova focus, line of sight, target stars, active 3D SETI Ellipsoid shell,
+    and a slider to dynamically change tolerance from +/-30 days up to +/-50 years.
     """
     stars_df = stars_df.copy()
 
-    # Parse dates & compute elapsed time in years
     obs_dt = _parse_datetime(current_date)
     epoch_dt = _parse_datetime(sn_epoch)
     elapsed_years = (obs_dt - epoch_dt).total_seconds() / (86400.0 * DAYS_PER_YEAR)
 
-    # Automatically compute exact delay in days for all stars
+    # Compute delay in days
     delay_days = calculate_ellipsoid_delay(
         ra_deg=stars_df["ra"],
         dec_deg=stars_df["dec"],
@@ -122,7 +117,8 @@ def generate_interactive_3d_ellipsoid(
 
     fig = go.Figure()
 
-    # 1. Earth at origin (0,0,0)
+    # Fixed Base Traces (Index 0, 1, 2, 3)
+    # 0. Earth
     fig.add_trace(
         go.Scatter3d(
             x=[0],
@@ -136,7 +132,7 @@ def generate_interactive_3d_ellipsoid(
         )
     )
 
-    # 2. Supernova focus
+    # 1. Supernova
     fig.add_trace(
         go.Scatter3d(
             x=[xe],
@@ -150,7 +146,7 @@ def generate_interactive_3d_ellipsoid(
         )
     )
 
-    # 3. Dashed line of sight Earth -> Supernova
+    # 2. Line of Sight
     fig.add_trace(
         go.Scatter3d(
             x=[0, xe],
@@ -162,7 +158,7 @@ def generate_interactive_3d_ellipsoid(
         )
     )
 
-    # 4. Translucent 3D Ellipsoid Surface Mesh
+    # 3. Translucent Ellipsoid Surface Mesh
     try:
         X_mesh, Y_mesh, Z_mesh = _create_ellipsoid_mesh(xe, ye, ze, sn_dist_pc, elapsed_years)
         fig.add_trace(
@@ -180,51 +176,118 @@ def generate_interactive_3d_ellipsoid(
     except Exception as err:
         print(f"Warning: Could not render ellipsoid mesh surface: {err}")
 
-    # 5. Target Stars Scatter3d color-coded by ellipsoid status
-    shell_mask = np.abs(delay_days) <= 365.0
-    past_mask = delay_days < -365.0
-    future_mask = delay_days > 365.0
+    # Slider Tolerance Options (in days)
+    tolerance_steps = [
+        ("±30 days", 30.0),
+        ("±90 days", 90.0),
+        ("±1 year", 365.25),
+        ("±5 years", 1826.25),
+        ("±10 years", 3652.5),
+        ("±50 years", 18262.5),
+        ("±500 years", 182625.0),
+    ]
 
-    for mask, color, label_name, symbol in [
-        (past_mask, "#7c4dff", "Past Shell (Foreground / Light Passed)", "circle"),
-        (shell_mask, "#00e676", "ACTIVE SETI SHELL (On Surface ±1yr)", "diamond"),
-        (future_mask, "#ff5252", "Future Shell (Background / Not Arrived)", "circle"),
-    ]:
-        if not np.any(mask):
-            continue
+    base_trace_count = 4
+    num_steps = len(tolerance_steps)
 
-        df_sub = stars_df[mask]
-        sub_hover = [
-            f"<b>Star ID:</b> {row.get('source_id', 'N/A')}<br>"
-            f"<b>RA:</b> {row['ra']:.4f}° | <b>Dec:</b> {row['dec']:.4f}°<br>"
-            f"<b>Distance:</b> {row['dist_pc']:.1f} pc<br>"
-            f"<b>G mag:</b> {row.get('phot_g_mean_mag', 0.0):.2f}<br>"
-            f"<b>Ellipsoid Delay:</b> {row.get('delay_days', 0.0):+.1f} days"
-            for _, row in df_sub.iterrows()
-        ]
+    # Generate 3 categorised star traces for each tolerance step
+    for step_idx, (label, tol_days) in enumerate(tolerance_steps):
+        shell_mask = np.abs(delay_days) <= tol_days
+        past_mask = delay_days < -tol_days
+        future_mask = delay_days > +tol_days
 
-        fig.add_trace(
-            go.Scatter3d(
-                x=xs[mask],
-                y=ys[mask],
-                z=zs[mask],
-                mode="markers",
-                marker=dict(
-                    size=8 if label_name.startswith("ACTIVE") else 4,
-                    color=color,
-                    symbol=symbol,
-                    opacity=0.9,
-                ),
-                text=sub_hover,
-                hoverinfo="text",
-                name=f"{label_name} ({sum(mask)})",
+        default_visible = (step_idx == 2)  # Step '±1 year' visible by default
+
+        for mask, color, label_name, symbol in [
+            (past_mask, "#7c4dff", f"Past Shell (< -{label})", "circle"),
+            (shell_mask, "#00e676", f"ACTIVE SETI SHELL ({label})", "diamond"),
+            (future_mask, "#ff5252", f"Future Shell (> +{label})", "circle"),
+        ]:
+            if not np.any(mask):
+                # Empty placeholder trace
+                fig.add_trace(
+                    go.Scatter3d(
+                        x=[],
+                        y=[],
+                        z=[],
+                        mode="markers",
+                        name=f"{label_name} (0)",
+                        visible=default_visible,
+                    )
+                )
+                continue
+
+            df_sub = stars_df[mask]
+            sub_hover = [
+                f"<b>Star ID:</b> {row.get('source_id', 'N/A')}<br>"
+                f"<b>RA:</b> {row['ra']:.4f}° | <b>Dec:</b> {row['dec']:.4f}°<br>"
+                f"<b>Distance:</b> {row['dist_pc']:.1f} pc<br>"
+                f"<b>G mag:</b> {row.get('phot_g_mean_mag', 0.0):.2f}<br>"
+                f"<b>Ellipsoid Delay:</b> {row.get('delay_days', 0.0):+.1f} days"
+                for _, row in df_sub.iterrows()
+            ]
+
+            fig.add_trace(
+                go.Scatter3d(
+                    x=xs[mask],
+                    y=ys[mask],
+                    z=zs[mask],
+                    mode="markers",
+                    marker=dict(
+                        size=9 if label_name.startswith("ACTIVE") else 4,
+                        color=color,
+                        symbol=symbol,
+                        opacity=0.9,
+                    ),
+                    text=sub_hover,
+                    hoverinfo="text",
+                    name=f"{label_name} ({sum(mask)})",
+                    visible=default_visible,
+                )
+            )
+
+    # Construct Plotly Slider Steps
+    slider_steps = []
+    total_traces = len(fig.data)
+
+    for step_idx, (label, tol_days) in enumerate(tolerance_steps):
+        # Build visibility vector for all traces
+        # Base 4 traces are always True
+        visibility = [True] * base_trace_count
+
+        # For tolerance step traces (3 traces per step)
+        for i in range(num_steps):
+            is_active_step = (i == step_idx)
+            visibility.extend([is_active_step, is_active_step, is_active_step])
+
+        slider_steps.append(
+            dict(
+                method="update",
+                label=label,
+                args=[
+                    {"visible": visibility},
+                    {"title.text": f"🌌 SETI Ellipsoid 3D Model | {sn_name} | Shell Tolerance: {label}"},
+                ],
             )
         )
+
+    # Plotly Layout with Slider Controls
+    sliders = [
+        dict(
+            active=2,  # Default to ±1 year
+            currentvalue={"prefix": "⏱️ Shell Tolerance Window: ", "font": {"color": "#00e5ff", "size": 14}},
+            pad={"t": 30, "b": 10},
+            steps=slider_steps,
+            bgcolor="#222",
+            activebgcolor="#00e5ff",
+            font={"color": "#fff"},
+        )
+    ]
 
     fig.update_layout(
         template="plotly_dark",
         title=dict(
-            text=f"🌌 SETI Ellipsoid 3D Interactive Model | {sn_name} (Elapsed: {elapsed_years:.1f} yrs)",
+            text=f"🌌 SETI Ellipsoid 3D Model | {sn_name} | Shell Tolerance: ±1 year",
             font=dict(size=16, color="#00e5ff"),
         ),
         scene=dict(
@@ -238,12 +301,13 @@ def generate_interactive_3d_ellipsoid(
             ),
         ),
         dragmode="turntable",
+        sliders=sliders,
         legend=dict(
             yanchor="top",
             y=0.99,
             xanchor="left",
             x=0.01,
-            bgcolor="rgba(0,0,0,0.7)",
+            bgcolor="rgba(0,0,0,0.75)",
             bordercolor="rgba(0,229,255,0.4)",
             borderwidth=1,
         ),
@@ -266,9 +330,8 @@ def generate_interactive_3d_ellipsoid(
                 "orbit3d",
                 "table3d",
                 "resetCameraDefault3d",
-                "resetCameraLastSave3d",
             ],
         },
     )
-    print(f"✅ Interactive 3D visualization generated: {output_html}")
+    print(f"✅ Interactive 3D visualization with tolerance slider generated: {output_html}")
     return output_html
