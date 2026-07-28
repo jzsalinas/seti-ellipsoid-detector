@@ -17,6 +17,7 @@ Registro histórico centralizado de pruebas de campo, experimentos en vivo y ben
 | **EXP-007** | 2026-07-28 19:07 | `phase-6` | ETI Reaction Latency & Shell Thickness Sensitivity Benchmark | ✅ Completed | [007_alien_latency_benchmark.md](benchmarks/007_alien_latency_benchmark.md) |
 | **EXP-008** | 2026-07-28 19:18 | `phase-6` | Gaia DR3 + AllWISE Mid-Infrared Excess (Dyson Swarm) Candidate Search | ✅ Completed | [008_infrared_excess_benchmark.md](benchmarks/008_infrared_excess_benchmark.md) |
 | **EXP-009** | 2026-07-28 19:25 | `phase-6` | Fink Broker Real-Time Alert Streaming & Photometric Anomaly Monitoring | ✅ Completed | [009_fink_streaming_benchmark.md](benchmarks/009_fink_streaming_benchmark.md) |
+| **EXP-010** | 2026-07-28 19:31 | `phase-6` | Breakthrough Listen Open Data Radio Technosignature & Doppler Drift Benchmark | ✅ Completed | [010_breakthrough_listen_benchmark.md](benchmarks/010_breakthrough_listen_benchmark.md) |
 
 ---
 
