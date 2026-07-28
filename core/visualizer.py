@@ -1,9 +1,12 @@
 """
-Interactive 3D SETI Ellipsoid & Stellar Catalog Visualizer with Perpendicular Latitude Rings.
+Interactive 3D SETI Ellipsoid & Stellar Catalog Visualizer with Time-Expanding Surface Mesh & Surface Ring Projections.
 
-Generates dark-theme WebGL 3D interactive visualizations (Plotly HTML) rendering
-Earth (Gold), Supernova focus (Cyan-White glowing star), line of sight, target stars,
-active 3D SETI Ellipsoid shell, perpendicular active latitude rings, and a dynamic tolerance slider.
+Generates dark-theme WebGL 3D interactive visualizations (Plotly HTML) rendering:
+- Earth: Gold sphere focus
+- Supernova: Cyan-white glowing sphere focus
+- 3D Translucent Ellipsoid Mesh: Expands/contracts dynamically with the time slider
+- Active Stars: Highlighted with exact latitude rings projected ON THE SURFACE MESH of the ellipsoid
+  and dotted radial projection vectors connecting stars to their surface projection points.
 """
 
 from typing import Optional, Dict, Any, List, Tuple
@@ -78,44 +81,74 @@ def _create_ellipsoid_mesh(
     return X, Y, Z
 
 
-def _generate_perpendicular_ring(
-    xe: float, ye: float, ze: float, xs: float, ys: float, zs: float, n_pts: int = 60
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+def _generate_surface_ring_and_projections(
+    xe: float, ye: float, ze: float, d0: float, delta_t_years: float,
+    xs_in: Any, ys_in: Any, zs_in: Any, n_pts: int = 50
+) -> Tuple[List[float], List[float], List[float], List[float], List[float], List[float]]:
     """
-    Generates 3D circle coordinates (rx, ry, rz) perpendicular to the focal axis
-    passing through star (xs, ys, zs).
+    Generates 3D coordinates for rings projected EXACTLY ON THE SURFACE MESH of the ellipsoid,
+    plus dotted projection vectors connecting stars to their surface projection points.
     """
+    xs = np.asarray(xs_in, dtype=float)
+    ys = np.asarray(ys_in, dtype=float)
+    zs = np.asarray(zs_in, dtype=float)
+
+    path_diff_pc = delta_t_years / PARSEC_TO_LIGHT_YEAR
+    a = (d0 + path_diff_pc) / 2.0
+    c_foci = d0 / 2.0
+    b = np.sqrt(max(a ** 2 - c_foci ** 2, 1.0))
+
     sn_vec = np.array([xe, ye, ze], dtype=float)
     norm_sn = np.linalg.norm(sn_vec)
     v_axis = sn_vec / norm_sn if norm_sn > 0 else np.array([1.0, 0.0, 0.0])
 
-    s_vec = np.array([xs, ys, zs], dtype=float)
-    p_axial = np.dot(s_vec, v_axis)
-    c_ring = p_axial * v_axis
+    ring_xs, ring_ys, ring_zs = [], [], []
+    vec_xs, vec_ys, vec_zs = [], [], []
 
-    radial_vec = s_vec - c_ring
-    r_ring = np.linalg.norm(radial_vec)
+    for i in range(len(xs)):
+        s_vec = np.array([xs[i], ys[i], zs[i]], dtype=float)
+        p_axial = np.dot(s_vec, v_axis)
+        x_center = p_axial - (d0 / 2.0)
 
-    if r_ring < 1e-3:
-        u1 = np.cross(v_axis, [0.0, 0.0, 1.0])
-        if np.linalg.norm(u1) < 1e-3:
-            u1 = np.cross(v_axis, [0.0, 1.0, 0.0])
-        r_ring = 5.0  # fallback minimal radius for visual ring
-    else:
-        u1 = radial_vec
+        if abs(x_center) >= a:
+            r_surf = 2.0
+        else:
+            r_surf = b * np.sqrt(max(1.0 - (x_center / a) ** 2, 1e-4))
 
-    u1 = u1 / np.linalg.norm(u1)
-    u2 = np.cross(v_axis, u1)
-    u2 = u2 / np.linalg.norm(u2)
+        c_ring = p_axial * v_axis
+        radial_vec = s_vec - c_ring
+        dist_radial = np.linalg.norm(radial_vec)
 
-    theta = np.linspace(0, 2 * np.pi, n_pts)
-    ring_pts = (
-        c_ring[:, None]
-        + r_ring * np.cos(theta)[None, :] * u1[:, None]
-        + r_ring * np.sin(theta)[None, :] * u2[:, None]
-    )
+        if dist_radial < 1e-3:
+            u1 = np.cross(v_axis, [0.0, 0.0, 1.0])
+            if np.linalg.norm(u1) < 1e-3:
+                u1 = np.cross(v_axis, [0.0, 1.0, 0.0])
+            u1 = u1 / np.linalg.norm(u1)
+        else:
+            u1 = radial_vec / dist_radial
 
-    return ring_pts[0], ring_pts[1], ring_pts[2]
+        u2 = np.cross(v_axis, u1)
+        u2 = u2 / np.linalg.norm(u2)
+
+        # Ring on surface mesh
+        theta = np.linspace(0, 2 * np.pi, n_pts)
+        r_pts = (
+            c_ring[:, None]
+            + r_surf * np.cos(theta)[None, :] * u1[:, None]
+            + r_surf * np.sin(theta)[None, :] * u2[:, None]
+        )
+
+        ring_xs.extend(list(r_pts[0]) + [None])
+        ring_ys.extend(list(r_pts[1]) + [None])
+        ring_zs.extend(list(r_pts[2]) + [None])
+
+        # Projection vector from star to nearest surface point
+        s_proj = c_ring + r_surf * u1
+        vec_xs.extend([s_vec[0], s_proj[0], None])
+        vec_ys.extend([s_vec[1], s_proj[1], None])
+        vec_zs.extend([s_vec[2], s_proj[2], None])
+
+    return ring_xs, ring_ys, ring_zs, vec_xs, vec_ys, vec_zs
 
 
 def generate_interactive_3d_ellipsoid(
@@ -131,19 +164,19 @@ def generate_interactive_3d_ellipsoid(
     """
     Generates an interactive Plotly 3D WebGL HTML visualization.
     - Earth: Gold sphere at (0,0,0)
-    - Supernova: Cyan-white glowing sphere focus
-    - Target Stars: Point markers
-    - Active Shell Stars: Highlighted with perpendicular circular latitude rings on the 3D surface
-    - Interactive Tolerance Slider: Dynamic switching from +/-30 days up to +/-500 years
+    - Supernova: Glowing Cyan-White sphere
+    - Dynamic Ellipsoid Surface Mesh: Expands with time slider
+    - Active Shell Latitude Rings: Projected EXACTLY ON THE SURFACE MESH
+    - Dotted Projection Vectors: Connecting stars to their exact surface rings
     """
     stars_df = stars_df.copy()
 
     obs_dt = _parse_datetime(current_date)
     epoch_dt = _parse_datetime(sn_epoch)
-    elapsed_years = (obs_dt - epoch_dt).total_seconds() / (86400.0 * DAYS_PER_YEAR)
+    elapsed_years_base = (obs_dt - epoch_dt).total_seconds() / (86400.0 * DAYS_PER_YEAR)
 
-    # Compute delay in days
-    delay_days = calculate_ellipsoid_delay(
+    # Compute base delay in days for current date
+    delay_days_base = calculate_ellipsoid_delay(
         ra_deg=stars_df["ra"],
         dec_deg=stars_df["dec"],
         dist_pc=stars_df["dist_pc"],
@@ -153,14 +186,18 @@ def generate_interactive_3d_ellipsoid(
         sn_dist_pc=sn_dist_pc,
         sn_epoch=sn_epoch,
     )
-    stars_df["delay_days"] = delay_days
+    stars_df["delay_days"] = delay_days_base
 
     xe, ye, ze = spherical_to_cartesian(sn_ra, sn_dec, sn_dist_pc)
     xs, ys, zs = spherical_to_cartesian(stars_df["ra"], stars_df["dec"], stars_df["dist_pc"])
+    xs_arr = np.asarray(xs)
+    ys_arr = np.asarray(ys)
+    zs_arr = np.asarray(zs)
 
     fig = go.Figure()
 
-    # 1. Earth (Gold sphere at origin)
+    # Base Traces (Index 0, 1, 2)
+    # 0. Earth (Gold sphere)
     fig.add_trace(
         go.Scatter3d(
             x=[0],
@@ -174,26 +211,21 @@ def generate_interactive_3d_ellipsoid(
         )
     )
 
-    # 2. Supernova (Glowing Cyan-White sphere)
+    # 1. Supernova (Glowing Cyan-White sphere)
     fig.add_trace(
         go.Scatter3d(
             x=[xe],
             y=[ye],
             z=[ze],
             mode="markers+text",
-            marker=dict(
-                size=13,
-                color="#e0f7fa",
-                symbol="circle",
-                line=dict(color="#00e5ff", width=3),
-            ),
+            marker=dict(size=13, color="#e0f7fa", symbol="circle", line=dict(color="#00e5ff", width=3)),
             text=[f"💥 {sn_name}"],
             textposition="top center",
             name=f"{sn_name} (Focus 2, d={sn_dist_pc:.0f} pc)",
         )
     )
 
-    # 3. Line of sight Earth -> Supernova
+    # 2. Line of sight Earth -> Supernova
     fig.add_trace(
         go.Scatter3d(
             x=[0, xe],
@@ -205,162 +237,164 @@ def generate_interactive_3d_ellipsoid(
         )
     )
 
-    # 4. Translucent 3D Ellipsoid Surface Mesh
-    try:
-        X_mesh, Y_mesh, Z_mesh = _create_ellipsoid_mesh(xe, ye, ze, sn_dist_pc, elapsed_years)
-        fig.add_trace(
-            go.Surface(
-                x=X_mesh,
-                y=Y_mesh,
-                z=Z_mesh,
-                colorscale=[[0, "rgba(0, 229, 255, 0.20)"], [1, "rgba(0, 229, 255, 0.20)"]],
-                showscale=False,
-                name=f"SETI Ellipsoid Shell ({elapsed_years:.1f} yr)",
-                hoverinfo="name",
-                opacity=0.28,
-            )
-        )
-    except Exception as err:
-        print(f"Warning: Could not render ellipsoid mesh surface: {err}")
-
-    # Slider Tolerance Steps
-    tolerance_steps = [
-        ("±30 days", 30.0),
-        ("±90 days", 90.0),
-        ("±1 year", 365.25),
-        ("±5 years", 1826.25),
-        ("±10 years", 3652.5),
-        ("±50 years", 18262.5),
-        ("±500 years", 182625.0),
+    # Time Steps for Slider (Time Evolution of Ellipsoid)
+    time_steps = [
+        ("Present Day (2026)", 0.0, 365.25),
+        ("+10 Years", 10.0, 365.25),
+        ("+50 Years", 50.0, 1826.25),
+        ("+100 Years", 100.0, 3652.5),
+        ("+500 Years", 500.0, 18262.5),
+        ("-50 Years", -50.0, 1826.25),
     ]
 
-    base_trace_count = 4
-    num_steps = len(tolerance_steps)
+    base_trace_count = 3
+    num_steps = len(time_steps)
+    traces_per_step = 6  # [Surface Mesh, Past Stars, Active Stars, Future Stars, Surface Rings, Projection Vectors]
 
-    # For each step, we add 4 traces:
-    # Trace A: Past Stars (Points)
-    # Trace B: Active Stars (Points)
-    # Trace C: Future Stars (Points)
-    # Trace D: Perpendicular Rings for Active Stars (Lines)
-    traces_per_step = 4
+    for step_idx, (step_label, year_offset, tol_days) in enumerate(time_steps):
+        target_elapsed_years = elapsed_years_base + year_offset
+        target_delay_offset = year_offset * DAYS_PER_YEAR
+        current_delays = delay_days_base - target_delay_offset
 
-    for step_idx, (label, tol_days) in enumerate(tolerance_steps):
-        shell_mask = np.abs(delay_days) <= tol_days
-        past_mask = delay_days < -tol_days
-        future_mask = delay_days > +tol_days
+        default_visible = (step_idx == 0)  # Present Day visible by default
 
-        default_visible = (step_idx == 2)  # Step '±1 year' visible by default
+        # 1. Dynamic Ellipsoid Mesh for this date
+        try:
+            X_mesh, Y_mesh, Z_mesh = _create_ellipsoid_mesh(xe, ye, ze, sn_dist_pc, target_elapsed_years)
+            fig.add_trace(
+                go.Surface(
+                    x=X_mesh,
+                    y=Y_mesh,
+                    z=Z_mesh,
+                    colorscale=[[0, "rgba(0, 229, 255, 0.22)"], [1, "rgba(0, 229, 255, 0.22)"]],
+                    showscale=False,
+                    name=f"Ellipsoid Shell ({target_elapsed_years:.1f} yr)",
+                    hoverinfo="name",
+                    opacity=0.30,
+                    visible=default_visible,
+                )
+            )
+        except Exception:
+            fig.add_trace(go.Surface(x=[], y=[], z=[], visible=default_visible))
 
-        # A. Past Stars (Points)
+        # Classification for this time step
+        shell_mask = np.abs(current_delays) <= tol_days
+        past_mask = current_delays < -tol_days
+        future_mask = current_delays > +tol_days
+
+        # 2. Past Stars (Points)
         df_past = stars_df[past_mask]
         past_hover = [
             f"<b>Star ID:</b> {row.get('source_id', 'N/A')}<br>"
-            f"<b>RA:</b> {row['ra']:.4f}° | <b>Dec:</b> {row['dec']:.4f}°<br>"
             f"<b>Distance:</b> {row['dist_pc']:.1f} pc<br>"
-            f"<b>Ellipsoid Delay:</b> {row.get('delay_days', 0.0):+.1f} days"
-            for _, row in df_past.iterrows()
+            f"<b>Ellipsoid Delay:</b> {current_delays.iloc[i]:+.1f} days"
+            for i, (_, row) in enumerate(df_past.iterrows())
         ] if len(df_past) > 0 else []
 
         fig.add_trace(
             go.Scatter3d(
-                x=xs[past_mask],
-                y=ys[past_mask],
-                z=zs[past_mask],
+                x=xs_arr[past_mask],
+                y=ys_arr[past_mask],
+                z=zs_arr[past_mask],
                 mode="markers",
-                marker=dict(size=4, color="#7c4dff", symbol="circle", opacity=0.8),
+                marker=dict(size=4, color="#7c4dff", symbol="circle", opacity=0.7),
                 text=past_hover,
                 hoverinfo="text",
-                name=f"Past Shell (< -{label}) ({sum(past_mask)})",
+                name=f"Past Shell ({sum(past_mask)})",
                 visible=default_visible,
             )
         )
 
-        # B. Active Stars (Points)
+        # 3. Active Shell Stars (Points)
         df_active = stars_df[shell_mask]
         active_hover = [
             f"<b>ACTIVE SETI CANDIDATE!</b><br>"
             f"<b>Star ID:</b> {row.get('source_id', 'N/A')}<br>"
             f"<b>RA:</b> {row['ra']:.4f}° | <b>Dec:</b> {row['dec']:.4f}°<br>"
             f"<b>Distance:</b> {row['dist_pc']:.1f} pc<br>"
-            f"<b>Ellipsoid Delay:</b> {row.get('delay_days', 0.0):+.1f} days"
-            for _, row in df_active.iterrows()
+            f"<b>Delay at Date:</b> {current_delays.iloc[i]:+.1f} days"
+            for i, (_, row) in enumerate(df_active.iterrows())
         ] if len(df_active) > 0 else []
 
         fig.add_trace(
             go.Scatter3d(
-                x=xs[shell_mask],
-                y=ys[shell_mask],
-                z=zs[shell_mask],
+                x=xs_arr[shell_mask],
+                y=ys_arr[shell_mask],
+                z=zs_arr[shell_mask],
                 mode="markers",
-                marker=dict(size=7, color="#00e676", symbol="circle", line=dict(color="#ffffff", width=1), opacity=1.0),
+                marker=dict(size=8, color="#00e676", symbol="circle", line=dict(color="#ffffff", width=1), opacity=1.0),
                 text=active_hover,
                 hoverinfo="text",
-                name=f"ACTIVE SETI SHELL ({label}) ({sum(shell_mask)})",
+                name=f"ACTIVE SETI STARS ({sum(shell_mask)})",
                 visible=default_visible,
             )
         )
 
-        # C. Future Stars (Points)
+        # 4. Future Stars (Points)
         df_future = stars_df[future_mask]
         future_hover = [
             f"<b>Star ID:</b> {row.get('source_id', 'N/A')}<br>"
-            f"<b>RA:</b> {row['ra']:.4f}° | <b>Dec:</b> {row['dec']:.4f}°<br>"
             f"<b>Distance:</b> {row['dist_pc']:.1f} pc<br>"
-            f"<b>Ellipsoid Delay:</b> {row.get('delay_days', 0.0):+.1f} days"
-            for _, row in df_future.iterrows()
+            f"<b>Ellipsoid Delay:</b> {current_delays.iloc[i]:+.1f} days"
+            for i, (_, row) in enumerate(df_future.iterrows())
         ] if len(df_future) > 0 else []
 
         fig.add_trace(
             go.Scatter3d(
-                x=xs[future_mask],
-                y=ys[future_mask],
-                z=zs[future_mask],
+                x=xs_arr[future_mask],
+                y=ys_arr[future_mask],
+                z=zs_arr[future_mask],
                 mode="markers",
-                marker=dict(size=4, color="#ff5252", symbol="circle", opacity=0.8),
+                marker=dict(size=4, color="#ff5252", symbol="circle", opacity=0.7),
                 text=future_hover,
                 hoverinfo="text",
-                name=f"Future Shell (> +{label}) ({sum(future_mask)})",
+                name=f"Future Shell ({sum(future_mask)})",
                 visible=default_visible,
             )
         )
 
-        # D. Perpendicular Active Latitude Rings
+        # 5. Exact Surface Latitude Rings & 6. Projection Vectors
         if np.any(shell_mask):
-            ring_xs, ring_ys, ring_zs = [], [], []
-            for idx in np.where(shell_mask)[0]:
-                rx, ry, rz = _generate_perpendicular_ring(xe, ye, ze, xs[idx], ys[idx], zs[idx])
-                ring_xs.extend(list(rx) + [None])
-                ring_ys.extend(list(ry) + [None])
-                ring_zs.extend(list(rz) + [None])
+            rx, ry, rz, vx, vy, vz = _generate_surface_ring_and_projections(
+                xe, ye, ze, sn_dist_pc, target_elapsed_years,
+                xs_arr[shell_mask], ys_arr[shell_mask], zs_arr[shell_mask]
+            )
 
+            # Surface Latitude Rings
             fig.add_trace(
                 go.Scatter3d(
-                    x=ring_xs,
-                    y=ring_ys,
-                    z=ring_zs,
+                    x=rx,
+                    y=ry,
+                    z=rz,
                     mode="lines",
-                    line=dict(color="#00e676", width=5),
-                    name=f"Active Surface Rings ({sum(shell_mask)})",
+                    line=dict(color="#00e676", width=4),
+                    name=f"Surface Latitude Rings ({sum(shell_mask)})",
+                    hoverinfo="name",
+                    visible=default_visible,
+                )
+            )
+
+            # Projection Vectors (Dotted lines star -> surface)
+            fig.add_trace(
+                go.Scatter3d(
+                    x=vx,
+                    y=vy,
+                    z=vz,
+                    mode="lines",
+                    line=dict(color="#00e5ff", width=2, dash="dot"),
+                    name="Star Radial Projection Vectors",
                     hoverinfo="name",
                     visible=default_visible,
                 )
             )
         else:
-            fig.add_trace(
-                go.Scatter3d(
-                    x=[],
-                    y=[],
-                    z=[],
-                    mode="lines",
-                    name="Active Surface Rings (0)",
-                    visible=default_visible,
-                )
-            )
+            fig.add_trace(go.Scatter3d(x=[], y=[], z=[], mode="lines", name="Surface Latitude Rings (0)", visible=default_visible))
+            fig.add_trace(go.Scatter3d(x=[], y=[], z=[], mode="lines", name="Star Radial Projection Vectors", visible=default_visible))
 
-    # Build Slider Steps
+    # Build Plotly Slider Steps
     slider_steps = []
 
-    for step_idx, (label, tol_days) in enumerate(tolerance_steps):
+    for step_idx, (step_label, year_offset, tol_days) in enumerate(time_steps):
         visibility = [True] * base_trace_count
 
         for i in range(num_steps):
@@ -370,18 +404,18 @@ def generate_interactive_3d_ellipsoid(
         slider_steps.append(
             dict(
                 method="update",
-                label=label,
+                label=step_label,
                 args=[
                     {"visible": visibility},
-                    {"title.text": f"🌌 SETI Ellipsoid 3D Model | {sn_name} | Shell Tolerance: {label}"},
+                    {"title.text": f"🌌 SETI Ellipsoid 3D Dynamic Model | {sn_name} | Epoch: {step_label}"},
                 ],
             )
         )
 
     sliders = [
         dict(
-            active=2,  # Default to ±1 year
-            currentvalue={"prefix": "⏱️ Shell Tolerance Window: ", "font": {"color": "#00e5ff", "size": 14}},
+            active=0,  # Default to Present Day
+            currentvalue={"prefix": "⏱️ Time Evolution Epoch: ", "font": {"color": "#00e5ff", "size": 14}},
             pad={"t": 30, "b": 10},
             steps=slider_steps,
             bgcolor="#222",
@@ -393,7 +427,7 @@ def generate_interactive_3d_ellipsoid(
     fig.update_layout(
         template="plotly_dark",
         title=dict(
-            text=f"🌌 SETI Ellipsoid 3D Model | {sn_name} | Shell Tolerance: ±1 year",
+            text=f"🌌 SETI Ellipsoid 3D Dynamic Model | {sn_name} | Epoch: Present Day (2026)",
             font=dict(size=16, color="#00e5ff"),
         ),
         scene=dict(
@@ -439,5 +473,5 @@ def generate_interactive_3d_ellipsoid(
             ],
         },
     )
-    print(f"✅ Interactive 3D visualization generated: {output_html}")
+    print(f"✅ Interactive 3D visualization with dynamic expanding mesh generated: {output_html}")
     return output_html
