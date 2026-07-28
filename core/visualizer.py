@@ -95,6 +95,7 @@ def generate_interactive_3d_ellipsoid(
     """
     Generates an interactive Plotly 3D WebGL HTML visualization.
     Renders Earth, Supernova focus, line of sight, target stars, and the active 3D SETI Ellipsoid shell.
+    Includes enhanced camera controls (Pan, Zoom, Orbit, Resetting center).
     """
     obs_dt = _parse_datetime(current_date)
     epoch_dt = _parse_datetime(sn_epoch)
@@ -166,12 +167,10 @@ def generate_interactive_3d_ellipsoid(
     # 5. Target Stars Scatter3d color-coded by ellipsoid status
     delays = stars_df.get("delay_days", np.zeros(len(stars_df)))
 
-    # Classification
     shell_mask = np.abs(delays) <= 365.0
     past_mask = delays < -365.0
     future_mask = delays > 365.0
 
-    # Categorized traces for clear legend inspection
     for mask, color, label_name, symbol in [
         (past_mask, "#7c4dff", "Past Shell (Foreground / Light Passed)", "circle"),
         (shell_mask, "#00e676", "ACTIVE SETI SHELL (On Surface ±1yr)", "diamond"),
@@ -218,14 +217,21 @@ def generate_interactive_3d_ellipsoid(
             xaxis=dict(title="X (parsecs)", backgroundcolor="#111", gridcolor="#333"),
             yaxis=dict(title="Y (parsecs)", backgroundcolor="#111", gridcolor="#333"),
             zaxis=dict(title="Z (parsecs)", backgroundcolor="#111", gridcolor="#333"),
-            aspectmode="data",  # Preserves 1:1 isometric spatial proportions
+            aspectmode="data",
+            camera=dict(
+                up=dict(x=0, y=0, z=1),
+                eye=dict(x=1.25, y=1.25, z=1.25),
+            ),
         ),
+        dragmode="turntable",  # Enables turntable 3D rotation
         legend=dict(
             yanchor="top",
             y=0.99,
             xanchor="left",
             x=0.01,
-            bgcolor="rgba(0,0,0,0.6)",
+            bgcolor="rgba(0,0,0,0.7)",
+            bordercolor="rgba(0,229,255,0.4)",
+            borderwidth=1,
         ),
         margin=dict(l=0, r=0, b=0, t=40),
     )
@@ -234,6 +240,22 @@ def generate_interactive_3d_ellipsoid(
         os.makedirs("scratch", exist_ok=True)
         output_html = os.path.abspath(f"scratch/seti_ellipsoid_{sn_name.replace(' ', '_')}_3d.html")
 
-    fig.write_html(output_html, include_plotlyjs="cdn")
+    # Write HTML with displayModeBar & scrollZoom enabled for full pan/zoom control
+    fig.write_html(
+        output_html,
+        include_plotlyjs="cdn",
+        config={
+            "scrollZoom": True,
+            "displayModeBar": True,
+            "displaylogo": False,
+            "modeBarButtonsToAdd": [
+                "pan3d",
+                "orbit3d",
+                "table3d",
+                "resetCameraDefault3d",
+                "resetCameraLastSave3d",
+            ],
+        },
+    )
     print(f"✅ Interactive 3D visualization generated: {output_html}")
     return output_html
