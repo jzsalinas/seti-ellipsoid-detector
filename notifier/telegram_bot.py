@@ -128,7 +128,9 @@ def send_alert(
             }
             files = {"photo": img_file}
             res = requests.post(url, data=payload, files=files, timeout=15.0)
-            res.raise_for_status()
+            if not res.ok:
+                print(f"[Notifier] Telegram API Error ({res.status_code}): {res.text}")
+                return False
             print(f"[Notifier] Telegram alert successfully sent to chat {cid} for {star_id}.")
             return True
     except Exception as err:
