@@ -70,8 +70,9 @@ def run_monitoring_iteration(
     if alerts_df.empty:
         print("\nℹ️ No candidate surpassed priority alert threshold.")
     else:
-        print(f"\n🚨 {len(alerts_df)} HIGH PRIORITY SETI ANOMALIES DETECTED!")
-        for _, row in alerts_df.iterrows():
+        max_alerts = 3
+        print(f"\n🚨 {len(alerts_df)} HIGH PRIORITY SETI ANOMALIES DETECTED! (Dispatching top {min(len(alerts_df), max_alerts)} to Telegram)...")
+        for _, row in alerts_df.head(max_alerts).iterrows():
             star_id = str(row["source_id"])
             score = float(row["priority_score"]) / 100.0
             ra = float(row["ra"])
@@ -127,14 +128,15 @@ def main():
         run_monitoring_iteration(use_mock, latency_profile, anomaly_threshold, bot_token, chat_id)
         return
 
-    print("🔄 Starting live continuous monitoring loop (Ctrl+C to stop)...")
+    print("🔄 Starting live continuous monitoring loop (Ctrl+C to stop)...", flush=True)
     try:
         while True:
             run_monitoring_iteration(use_mock, latency_profile, anomaly_threshold, bot_token, chat_id)
-            print(f"\n💤 Sleeping for {poll_interval} seconds until next iteration...")
+            print(f"\n💤 Sleeping for {poll_interval} seconds until next iteration...", flush=True)
+            sys.stdout.flush()
             time.sleep(poll_interval)
     except KeyboardInterrupt:
-        print("\n🛑 Monitoring daemon stopped by user.")
+        print("\n🛑 Monitoring daemon stopped by user.", flush=True)
 
 
 if __name__ == "__main__":
