@@ -64,6 +64,9 @@ def run_monitoring_iteration(
     cols = ["source_id", "dist_pc", "anchors_hit_count", "is_dyson_candidate", "is_radio_candidate", "priority_score", "priority_tier"]
     print(master_df[cols].head(5).to_string(index=False))
 
+    # Export Master Catalog CSV and JSON artifacts for ALL evaluated stars
+    csv_p, json_p = generator.export_catalog(master_df)
+
     # Identify targets exceeding alert threshold or classified as CRITICAL/HIGH_PRIORITY
     alerts_df = master_df[master_df["priority_score"] >= (anomaly_threshold * 100.0)]
 
@@ -71,7 +74,12 @@ def run_monitoring_iteration(
         print("\nℹ️ No candidate surpassed priority alert threshold.")
     else:
         max_alerts = 3
-        print(f"\n🚨 {len(alerts_df)} HIGH PRIORITY SETI ANOMALIES DETECTED! (Dispatching top {min(len(alerts_df), max_alerts)} to Telegram)...")
+        print(f"\n🚨 {len(alerts_df)} HIGH PRIORITY SETI ANOMALIES DETECTED!")
+        print(f"📋 ALL {len(alerts_df)} detected anomalies logged to CSV/JSON artifacts: {csv_p}")
+        print(f"📱 Dispatching TOP {min(len(alerts_df), max_alerts)} critical alerts to Telegram...\n")
+        print(alerts_df[cols].to_string(index=False))
+        print("")
+
         for _, row in alerts_df.head(max_alerts).iterrows():
             star_id = str(row["source_id"])
             score = float(row["priority_score"]) / 100.0
